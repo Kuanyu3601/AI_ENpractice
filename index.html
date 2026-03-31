@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="css/global.css">
+    <link rel="stylesheet" href="css/navbar.css">
+    <link rel="stylesheet" href="css/sign_in.css">
+    
+
+    <script src="js/sign_in.js" defer></script>
+    <script src="js/navbar.js" defer></script>
+    <title>page.sign_in</title>
+</head>
+<body>
+
+    <div class="bg-circle bc1"></div>
+    <div class="bg-circle bc2"></div>
+
+    <div id="navbar-container"></div>
+
+
+    
+        <main>
+            <div class="group">
+            <div class="card">
+
+                <!-- Tab area with arrow slot -->
+                <div class="tab-wrapper">
+                    <div class="arrow-slot" id="arrowSlot">
+                        <!-- 箭頭圖片放置區（可替換 src 為你的箭頭圖片） -->
+                        <img class="arrow-img" id="arrowIndicator" src="image/arrow.png" alt="arrow">
+                        <!--
+                        若要使用自己的箭頭圖片，把上面 arrow-dot 替換為：
+                        <img class="arrow-img" id="arrowIndicator" src="your-arrow.png" alt="arrow">
+                        並在下方 JS 中將 classList 操作改為 arrowIndicator.classList...
+                        -->
+                    </div>
+                
+
+                <div class="tabs">
+                    
+                    <button class="tab-btn active" id="tabRegister" onclick="switchTab('register')">註冊</button>
+                    <button class="tab-btn" id="tabLogin" onclick="switchTab('login')">登入</button>
+                </div>
+                </div>
+                
+
+                <!-- Register Form -->
+                <div id="formRegister">
+                <div class="form-group" style="animation-delay:0.05s">
+                    <label>姓名</label>
+                    <input type="text" placeholder="請輸入您的姓名">
+                </div>
+                <div class="form-group" style="animation-delay:0.1s">
+                    <label>帳號</label>
+                    <input type="text" placeholder="請設定帳號">
+                </div>
+                <div class="form-group" style="animation-delay:0.15s">
+                    <label>密碼</label>
+                    <input type="password" placeholder="請設定密碼（至少 8 位）">
+                </div>
+                <button class="submit-btn">確認註冊</button>
+                <p class="footer-hint">已有帳號？<a href="#" onclick="switchTab('login');return false;">立即登入</a></p>
+                </div>
+
+                <!-- Login Form -->
+                <div id="formLogin" style="display:none;">
+                <div class="form-group" style="animation-delay:0.05s">
+                    <label>帳號</label>
+                    <input type="text" placeholder="請輸入帳號">
+                </div>
+                <div class="form-group" style="animation-delay:0.1s">
+                    <label>密碼</label>
+                    <input type="password" placeholder="請輸入密碼">
+                </div>
+                <a href="main.html">
+                    <button class="submit-btn">確認登入</button>
+
+                </a>
+                
+                <p class="footer-hint">尚無帳號？<a href="#" onclick="switchTab('register');return false;">立即註冊</a></p>
+                </div>
+
+            </div>
+
+            <div class="fox-gif">
+                <video autoplay loop muted playsinline>
+                    <source src="gif/fox.mov" type="video/quicktime">
+                </video>
+            </div>
+            
+
+
+            
+            </div>
+        </main>
+
+        
+
+    
+
+</body>
+</html>
