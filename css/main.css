@@ -1,0 +1,209 @@
+#navbar-container {
+    flex-shrink: 0; /* 確保 Navbar 區塊不會因為下方內容變多而被擠壓變扁 */
+}
+
+body, html {
+    height: 100vh;  /* 這裡保留 100vh */
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column; /* 讓內容由上往下排 */
+    overflow: hidden; /* 隱藏整個頁面的捲軸 */
+}
+
+
+.app-container {
+    display: flex;
+    
+    width: 100%;
+    overflow: hidden;
+}
+
+/* 左側紀錄區 (Sidebar) */
+.sidebar {
+    width: 260px;
+    background-color: var(--sidebar-bg);
+    color: white;
+    display: flex;
+    flex-direction: column;
+    transition: width 0.3s;
+
+
+}
+
+.sidebar-header {
+    padding: 20px;
+    font-size: 1.2rem;
+    font-weight: bold;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.new-chat-btn {
+    background-color: transparent;
+    color: white;
+    border: 1px solid white;
+    padding: 5px 10px;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: 0.2s;
+}
+
+.new-chat-btn:hover {
+    background-color: rgba(255,255,255,0.1);
+}
+
+.history-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px;
+    list-style: none;
+}
+
+.history-item {
+    padding: 12px 15px;
+    margin-bottom: 5px;
+    border-radius: 8px;
+    cursor: pointer;
+    color: #D5D8DC;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: background-color 0.2s;
+}
+
+.history-item:hover, .history-item.active {
+    background-color: var(--sidebar-hover);
+    color: white;
+}
+
+/* 右側聊天區 (Main Chat) */
+.main-chat {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background-color: var(--bg-color);
+}
+
+.chat-header {
+    height: 60px;
+    background-color: white;
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    align-items: center;
+    padding: 0 20px;
+    font-size: 1.2rem;
+    font-weight: 600;
+    color: var(--text-color);
+}
+
+.chat-messages {
+    flex: 1;
+    padding: 20px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    
+}
+
+.message {
+    max-width: 70%;
+    padding: 12px 16px;
+    border-radius: 12px;
+    line-height: 1.5;
+    position: relative;
+}
+
+.headshot {
+    padding: 5px 5px;
+    max-width: 10%;
+    border-radius: 50px;
+
+
+}
+
+.message.system {
+    align-self: flex-start;
+    background-color: var(--msg-sys-bg);
+    color: var(--text-color);
+    border: 1px solid var(--border-color);
+    border-bottom-left-radius: 2px;
+}
+
+.message.user {
+    align-self: flex-end;
+    background-color: var(--msg-user-bg);
+    color: var(--text-color);
+    border-bottom-right-radius: 2px;
+}
+
+ /* 底部輸入區 (Input Area) */
+.chat-input-area {
+    padding: 20px;
+    background-color: white;
+    border-top: 1px solid var(--border-color);
+}
+
+.input-wrapper {
+    max-width: 800px;
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    background-color: var(--bg-color);
+    border: 1px solid var(--border-color);
+    border-radius: 24px;
+    padding: 5px 15px;
+}
+
+.icon-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 1.2rem;
+    color: #666;
+    padding: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.2s;
+}
+
+.icon-btn:hover {
+    color: var(--primary-color);
+}
+
+/* 隱藏預設的上傳按鈕，使用 icon 代替 */
+input[type="file"] {
+    display: none;
+}
+
+input[type="text"] {
+    flex: 1;
+    border: none;
+    background: transparent;
+    padding: 10px;
+    font-size: 1rem;
+    outline: none;
+}
+
+.send-btn {
+    background-color: var(--primary-color);
+    color: white;
+    border: none;
+    border-radius: 50%;
+    width: 35px;
+    height: 35px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-left: 10px;
+    transition: background-color 0.2s;
+}
+
+.send-btn:hover {
+    background-color: #357ABD;
+}

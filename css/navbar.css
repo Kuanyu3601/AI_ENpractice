@@ -1,0 +1,56 @@
+/* ── Navbar ── */
+  nav {
+    background: var(--nav-bg);
+    border-bottom: 1px solid var(--border);
+    padding: 0 2.5rem;
+    height: 64px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    text-decoration: none;
+  }
+
+  .logo-icon {
+    width: 36px;
+    height: 36px;
+    background: var(--accent);
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .logo-icon svg {
+    width: 20px;
+    height: 20px;
+    fill: white;
+  }
+
+  .logo-text {
+    font-family: 'DM Serif Display', serif;
+    font-size: 1.3rem;
+    color: var(--text);
+    letter-spacing: 0.01em;
+  }
+
+  .user-btn {
+    padding: 6px 18px;
+    right: 10px;
+
+  }
+
+
+
+  .nav-cta:hover {
+    background: var(--accent);
+    color: white;
+  }

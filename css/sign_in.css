@@ -1,0 +1,295 @@
+main {
+    height: 100vh;
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 3rem 1rem;
+    gap: 50px;
+    overflow: hidden;
+    padding-left: 100px;
+
+  }
+
+  #navbar-container {
+    flex-shrink: 0; /* 確保 Navbar 區塊不會因為下方內容變多而被擠壓變扁 */
+
+    position: fixed; /* 將導覽列固定在畫面上 */
+    top: 0;          /* 貼齊頂部 */
+    left: 0;         /* 貼齊左側 */
+    width: 100%;     /* 寬度撐滿 */
+    z-index: 1000;   /* 設定很高的圖層數字，確保它不會被狐狸或卡片蓋住 */
+
+}
+
+  img, video {
+    display: block; /* 讓它變成區塊，獨佔一行 */
+    margin: 0 auto; /* (選用) 這樣寫可以讓它在畫面中水平置中 */
+}
+
+/* 設定這個新的包裝盒 */
+.group {
+    display: flex;           /* 讓裡面的卡片和狐狸左右並排 */
+    align-items: center;     /* 垂直置中對齊 */
+    
+    /* 👇 如果你想讓整組一起往右移，可以直接推這個盒子 👇 */
+    margin-left: 0px;      
+    flex-wrap: nowrap;
+}
+
+/* ── Card ── */
+.card {
+    background: var(--card);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    width: 100%;
+    max-width: 450px;
+
+    
+    padding: 2rem;
+    border: 1px solid var(--border);
+    box-sizing: border-box;
+
+    zoom: 1.1;
+
+       /* 向右移 */
+    
+    margin-top: 30px;
+    z-index: 1;
+  }
+
+  /* ── Tab Area ── */
+  .tab-wrapper {
+    margin-bottom: 1.75rem;
+  }
+
+  .arrow-slot {
+    height: 28px;
+    display: flex;
+    align-items: center;
+    margin-bottom: 4px;
+    position: relative;
+    top: 16px;
+  }
+
+  .arrow-img {
+    position: absolute;
+    height: 25px;
+    width: auto;
+    transition: left 0.35s cubic-bezier(0.34,1.56,0.64,1), opacity 0.2s;
+    /* 預設位置：register 按鈕下方 */
+    left: 12px;
+    pointer-events: none;
+  }
+
+  .arrow-img.move-right {
+    /* 移至 login 按鈕下方 */
+    left: calc(50% + 12px);
+  }
+
+  .tabs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0;
+    overflow: hidden;
+
+
+    height: 50px;
+    box-sizing: border-box;
+
+  }
+
+  .tab-btn {
+    background: transparent;
+    padding: 10px 0;
+    font-family: 'Noto Sans TC', sans-serif;
+    font-size: 0.9rem;
+    font-weight: 500;
+    cursor: pointer;
+    color: var(--tab-inactive);
+    transition: color 0.25s, background 0.25s;
+    letter-spacing: 0.03em;
+    position: relative;
+    z-index: 1;
+    border: 3px solid transparent; /* 邊框寬度 */
+
+    background-image: url('../image/tab-btn.png');
+    background-size: 100% 100%;  /* 圖片撐滿整個容器 */
+    background-repeat: no-repeat;
+
+  }
+
+  .tab-btn.active {
+    background: transparent;
+
+    border: 3px solid transparent;
+
+    background-image: url('../image/tab-btn-un.png');
+    background-size: 100% 100%;  /* 圖片撐滿整個容器 */
+    background-repeat: no-repeat;
+
+  }
+
+  /* ── Form ── */
+  .form-group {
+    margin-bottom: 1.1rem;
+    animation: fieldIn 0.3s ease both;
+
+    
+  }
+
+  @keyframes fieldIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  label {
+    display: block;
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: var(--muted);
+    margin-bottom: 6px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  input[type="text"],
+  input[type="password"],
+  input[type="email"] {
+    width: 100%;
+    background: var(--input-bg);
+    border: 1.5px solid var(--input-border);
+    border-radius: 10px;
+    padding: 11px 14px;
+    font-family: 'Noto Sans TC', sans-serif;
+    font-size: 0.9rem;
+    color: var(--text);
+    outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    box-sizing: border-box;
+  }
+
+  input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(192,104,64,0.12);
+  }
+
+  input::placeholder { color: #C5BAB3; }
+
+  /* ── Submit Button ── */
+  .submit-btn {
+    width: 100%;
+    background: transparent;
+    color: var(--tab-inactive);
+    border: none;
+    border-radius: 12px;
+    padding: 13px;
+    font-family: 'Noto Sans TC', sans-serif;
+    font-size: 0.95rem;
+    font-weight: 500;
+    cursor: pointer;
+    letter-spacing: 0.05em;
+    margin-top: 1.5rem;
+    transition: background 0.2s, transform 0.15s;
+    position: relative;
+    overflow: hidden;
+
+    background-image: url('../image/tab-btn.png');
+    background-size: 100% 100%;  /* 圖片撐滿整個容器 */
+    background-repeat: no-repeat;
+  }
+
+  /*滑鼠停在上方*/
+  .submit-btn:hover { 
+    background-image: url('../image/tab-btn-un.png');
+    background-size: 100% 100%;  /* 圖片撐滿整個容器 */
+    background-repeat: no-repeat;
+  }
+
+  /*點擊效果*/
+  .submit-btn:active { transform: scale(0.98); } /*縮小*/
+
+  /*白色光暈層*/
+  .submit-btn::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: rgba(255,255,255,0.15);
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+
+  .submit-btn:hover::after { opacity: 1; }
+
+  /* ── Footer hint ── */
+  .footer-hint {
+    text-align: center;
+    font-size: 0.78rem;
+    color: var(--muted);
+    margin-top: 1.25rem;
+  }
+
+  .footer-hint a {
+    color: #b3b6cb;
+    text-decoration: none;
+    font-weight: 500;
+  }
+  /* ── BG decoration ── */
+  .bg-circle {
+    position: fixed;
+    border-radius: 50%;
+    background: rgba(192,104,64,0.06);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .bc1 { width: 420px; height: 420px; top: -120px; right: -100px; }
+  .bc2 { width: 280px; height: 280px; bottom: -60px; left: -80px; }
+
+  .fox-gif{
+    width: 100%;  
+    max-width: 800px;        /* 容器寬度 */
+    text-align: center;   /* 讓裡面的行內元素置中 */
+    
+    position: relative; /* 開啟定位功能 */
+    z-index: 2;         /* 設定在第 2 層 (上層，所以會蓋住卡片) */
+    
+    /* 這裡的數值可以自己微調，數字越負，蓋住的範圍就越多 */
+    margin-left: -15px;
+    margin-top: 225px;
+  }
+
+  .fox-gif video{
+    max-width: 100%;
+  }
+  
+  
+/* =========================================
+   手機與平板版面適應 (當視窗寬度小於 900px 時觸發)
+   ========================================= */
+@media screen and (max-width: 768px) {
+    
+    /* 1. 將排版從「左右並排」改成「上下排列」 */
+    main {
+        flex-direction: column; /* 改為直向排列 */
+        padding-left: 1rem;     /* 取消剛剛為了右移加的巨大 padding */
+        padding-right: 1rem;
+        gap: 30px;              /* 調整卡片跟影片上下的間距 */
+    }
+
+    /* 2. 讓卡片乖乖縮回原本的大小，取消平移與放大 */
+    .card {
+        transform: none; /* 取消所有的 scale 和 translateX */
+        margin-top: 20px;
+        width: 100%;
+        max-width: 100%; /* 在手機上讓卡片撐滿可用空間 */
+    }
+
+    /* 3. 解除狐狸影片的重疊設定與平移 */
+    .fox-gif {
+        margin-left: 0;  /* 取消負邊距，不重疊了 */
+        transform: none; /* 取消平移 */
+        width: 100%;
+        max-width: 300px; /* 在手機上讓影片稍微變小一點 */
+    }
+}
