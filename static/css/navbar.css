@@ -3,7 +3,7 @@
     background: var(--nav-bg);
     border-bottom: 1px solid var(--border);
     padding: 0 2.5rem;
-    height: 64px;
+    height: 70px;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -45,6 +45,7 @@
   .user-btn {
     padding: 6px 18px;
     right: 10px;
+    margin-right: 0px;
 
   }
 
