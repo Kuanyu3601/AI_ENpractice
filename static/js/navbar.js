@@ -7,7 +7,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return;
   }
 
-  fetch('navbar.html')
+  fetch('/navbar')
     .then(res => {
       console.log('連線狀態：', res.status);
       if (!res.ok) throw new Error('找不到 navbar.html 檔案');
