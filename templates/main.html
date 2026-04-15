@@ -8,53 +8,249 @@
     <link rel="stylesheet" href="../static/css/main.css">
 
     <script src="../static/js/navbar.js" defer></script>
+    <script src="../static/js/main.js" defer></script>
     <title>page.front</title>
 </head>
 <body>
-    <div id="navbar-container"></div>
-
-    <div class="app-container">
-        <aside class="sidebar">
+    <!-- ── Navbar ── -->
+<div id="navbar-container">
+    <nav>
+        <a class="logo" href="#">
+            <div class="logo-icon">
+                <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zm0 7L2 14l10 5 10-5-10-5z"/></svg>
+            </div>
+            <span class="logo-text">English</span>
+        </a>
+        <img class="user-btn" id="userBtn" src="../static/image/home-user.svg" alt="icon_user">
+    </nav>
+</div>
+ 
+<!-- ── Profile Panel Overlay ── -->
+<div class="profile-overlay" id="profileOverlay"></div>
+<div class="profile-panel" id="profilePanel">
+    <div class="profile-panel-header">
+        <span class="profile-panel-title">個人資料</span>
+        <button class="profile-close-btn" id="profileCloseBtn">✕</button>
+    </div>
+    <div class="profile-body">
+        <div class="profile-field">
+            <label>姓名</label>
+            <input type="text" id="profileName" placeholder="請輸入姓名">
+        </div>
+        <div class="profile-field">
+            <label>年齡（歲）</label>
+            <input type="number" id="profileAge" placeholder="請輸入年齡" min="1" max="120">
+        </div>
+        <div class="profile-field">
+            <label>帳號</label>
+            <input type="text" id="profileUsername" placeholder="帳號">
+        </div>
+        <button class="profile-action-btn change-pwd-btn" id="changePwdBtn">🔐 更改密碼</button>
+    </div>
+    <div class="profile-footer">
+        <button class="profile-save-btn" id="profileSaveBtn">儲存變更</button>
+        <button class="profile-logout-btn" id="logoutBtn">登出</button>
+    </div>
+</div>
+ 
+<!-- ── First-Time Modal ── -->
+<div class="modal-backdrop" id="firstTimeModal">
+    <div class="modal-card">
+        <div class="modal-emoji">👋</div>
+        <h2 class="modal-title">歡迎使用英文朗讀練習！</h2>
+        <p class="modal-desc">在開始之前，請填寫您的年齡，<br>讓我們為您提供個人化的學習體驗。</p>
+        <div class="modal-field">
+            <label>您的年齡（歲）</label>
+            <input type="number" id="modalAge" placeholder="例：15" min="1" max="120">
+        </div>
+        <button class="modal-confirm-btn" id="modalConfirmBtn">確認並開始 →</button>
+    </div>
+</div>
+ 
+<!-- ── Toast ── -->
+<div class="toast" id="toast"></div>
+ 
+<!-- ── App Layout ── -->
+<div class="app-container">
+ 
+    <!-- Sidebar -->
+    <aside class="sidebar">
         <div class="sidebar-header">
             練習紀錄
-            <button class="new-chat-btn">+</button>
+            <button class="new-chat-btn" id="newSessionBtn">+</button>
         </div>
-        <ul class="history-list">
-            <li class="history-item active">The Road Not Taken</li>
-            <li class="history-item">Steve Jobs Speech</li>
-            <li class="history-item">BBC News Reading</li>
-            <li class="history-item">The Road Not Taken</li>
-            <li class="history-item">Steve Jobs Speech</li>
-            <li class="history-item">BBC News Reading</li>
-            <li class="history-item">The Road Not Taken</li>
-            <li class="history-item">Steve Jobs Speech</li>
-            <li class="history-item">BBC News Reading</li>
-            <li class="history-item">The Road Not Taken</li>
-            <li class="history-item">Steve Jobs Speech</li>
-            <li class="history-item">BBC News Reading</li>
-            <li class="history-item">The Road Not Taken</li>
-            <li class="history-item">Steve Jobs Speech</li>
-            <li class="history-item">BBC News Reading</li>
-            <li class="history-item ">The Road Not Taken</li>
-            <li class="history-item">Steve Jobs Speech</li>
-            <li class="history-item">BBC News Reading</li>
+        <ul class="history-list" id="historyList">
+            <li class="history-item muted">尚無練習紀錄</li>
         </ul>
     </aside>
-
+ 
+    <!-- Main Chat -->
     <main class="main-chat">
+ 
+        <!-- Chat Header -->
         <header class="chat-header">
-            文章名
+            <span class="chat-title" id="chatTitle">選擇文章開始練習</span>
+            <div class="reading-count-wrapper">
+                <button class="reading-count-btn" id="readingCountBtn">
+                    第 <span id="readingCountNum">—</span> 次
+                    <svg class="dropdown-chevron" viewBox="0 0 12 12" width="12" height="12">
+                        <path d="M2 4l4 4 4-4" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                </button>
+                <div class="reading-history-dropdown" id="readingHistoryDropdown">
+                    <div class="dropdown-header">歷史朗讀紀錄</div>
+                    <div id="readingHistoryList">
+                        <p class="dropdown-empty">請先選擇文章</p>
+                    </div>
+                </div>
+            </div>
         </header>
+ 
+        <!-- Step Navigator -->
+        <div class="step-nav">
+            <button class="step-arrow" id="prevArrow" disabled>&#9664;</button>
+            <div class="step-indicators">
+                <div class="step-dot active" data-step="0">
+                    <div class="step-circle">1</div>
+                    <span class="step-label">選擇文章</span>
+                </div>
+                <div class="step-line"></div>
+                <div class="step-dot" data-step="1">
+                    <div class="step-circle">2</div>
+                    <span class="step-label">錄音練習</span>
+                </div>
+                <div class="step-line"></div>
+                <div class="step-dot" data-step="2">
+                    <div class="step-circle">3</div>
+                    <span class="step-label">評分結果</span>
+                </div>
+            </div>
+            <button class="step-arrow" id="nextArrow">&#9654;</button>
+        </div>
+ 
+        <!-- Step Content -->
+        <div class="step-content">
+ 
+            <!-- ── Step 1: Select Article ── -->
+            <div class="step-panel active" id="panel-0">
+                <div class="upload-section">
+                    <h2 class="upload-title">選擇要朗讀的文章</h2>
+ 
+                    <div class="preset-articles">
+                        <h3 class="section-subtitle">選擇文章</h3>
+                        <div class="article-grid">
+                            <div class="article-card" data-article="shark">
+                                <div class="article-badge">可使用</div>
+                                <div class="article-name">Shark</div>
+                                <div class="article-meta">4 段 · 初級</div>
+                            </div>
+                            <div class="article-card locked" data-article="kitten">
+                                <div class="article-badge locked-badge">即將推出</div>
 
+                                <div class="article-name">Kitten's Choice</div>
+                                <div class="article-meta">敬請期待</div>
+                            </div>
+                            <div class="article-card locked" data-article="temp">
+                                <div class="article-badge locked-badge">即將推出</div>
 
-
-        
-        
-        
-
-        
+                                <div class="article-name">Temp</div>
+                                <div class="article-meta">敬請期待</div>
+                            </div>
+                        </div>
+                    </div>
+ 
+                    <div class="section-divider"><span>或上傳自訂文章</span></div>
+ 
+                    <div class="upload-area" id="uploadArea">
+                        <div class="upload-icon-wrap">
+                            <svg viewBox="0 0 48 48" width="40" height="40">
+                                <path d="M24 6v28M12 18l12-12 12 12" stroke="currentColor" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+                                <path d="M8 38h32" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+                            </svg>
+                        </div>
+                        <p class="upload-hint">拖曳 <strong>.txt</strong> 文章至此</p>
+                        <label class="upload-file-label">
+                            選擇檔案
+                            <input type="file" accept=".txt" id="fileInput">
+                        </label>
+                        <p class="upload-sub">每段以空行（Enter × 2）分隔</p>
+                    </div>
+ 
+                    <div class="selected-preview" id="selectedPreview">
+                        <div class="preview-header">
+                            <span class="preview-title-text" id="previewTitle"></span>
+                            <button class="clear-btn" id="clearBtn">✕ 重新選擇</button>
+                        </div>
+                        <div class="preview-body" id="previewContent"></div>
+                    </div>
+ 
+                    <button class="primary-btn start-btn" id="startBtn" disabled>
+                        開始練習 →
+                    </button>
+                </div>
+            </div>
+ 
+            <!-- ── Step 2: Recording ── -->
+            <div class="step-panel" id="panel-1">
+                <div class="record-section">
+                    <div class="paragraph-progress" id="paragraphProgress">段落 1 / 4</div>
+ 
+                    <!-- Paragraph overview pips (injected by JS below) -->
+                    <div class="para-overview-strip" id="paraOverviewStrip"></div>
+ 
+                    <div class="lyrics-view" id="lyricsView"></div>
+ 
+                    <div class="record-controls">
+                        <div class="timer-display" id="recordTimer">00:00</div>
+ 
+                        <div class="record-btn-row">
+                            <button class="record-btn" id="recordBtn">
+                                <span class="record-dot-anim"></span>
+                                <span id="recordBtnText">開始錄音</span>
+                            </button>
+                        </div>
+ 
+                        <div class="playback-row" id="playbackRow">
+                            <span class="playback-label">重聽錄音</span>
+                            <audio id="playbackAudio" controls></audio>
+                        </div>
+ 
+                        <button class="primary-btn upload-audio-btn" id="uploadAudioBtn">
+                            ✓ 上傳並繼續
+                        </button>
+                    </div>
+                </div>
+            </div>
+ 
+            <!-- ── Step 3: Score (Placeholder) ── -->
+            <div class="step-panel" id="panel-2">
+                <div class="score-section">
+                    <div class="score-placeholder">
+                        <div class="score-icon-wrap">🎯</div>
+                        <h2>評分結果</h2>
+                        <p class="score-desc">AI 語音評分功能即將推出</p>
+                        <p class="score-sub">完成所有段落錄音後，系統將自動分析您的發音、語調與流暢度，並給出詳細評分報告。</p>
+                        <div class="score-preview-cards">
+                            <div class="score-card-placeholder">
+                                <div class="scp-label">發音準確度</div>
+                                <div class="scp-bar"><div class="scp-fill" style="width:0%"></div></div>
+                            </div>
+                            <div class="score-card-placeholder">
+                                <div class="scp-label">流暢度</div>
+                                <div class="scp-bar"><div class="scp-fill" style="width:0%"></div></div>
+                            </div>
+                            <div class="score-card-placeholder">
+                                <div class="scp-label">語調節奏</div>
+                                <div class="scp-bar"><div class="scp-fill" style="width:0%"></div></div>
+                            </div>
+                        </div>
+                        <p class="score-coming-soon">⏳ 敬請期待</p>
+                    </div>
+                </div>
+            </div>
+ 
+        </div><!-- end .step-content -->
     </main>
-
-    </div>
+</div><!-- end .app-container -->
 </body>
 </html>
