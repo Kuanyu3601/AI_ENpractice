@@ -1,0 +1,26 @@
+services:
+  web:
+    build: .
+    ports:
+      - "5001:5000"
+    volumes:
+      - .:/app
+      - ./kids_recordings:/app/kids_recordings
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    # 2. 全新的 Python 自動化分析後端
+  backend-wer:
+    build: ./backend-wer
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./models:/root/.cache/whisper
+
+  backend-npvi:
+    image: "speech-pipeline:v1"
+    ports:
+        - "8001:8000"
+      # 👇 💡 終極一槍斃命解法：強制覆蓋 entrypoint 與 command，繞過它壞掉的預設開機指令！
+    command: ["/opt/conda/bin/python", "/app/pipeline_v2.py", "--host", "0.0.0.0", "--port", "8000"]
+

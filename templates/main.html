@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="../static/css/global.css">
+    <link rel="stylesheet" href="../static/css/navbar.css">
+    <link rel="stylesheet" href="../static/css/main.css">
+
+    <!-- 💡 核心修正：在此處引入 WaveSurfer.js 及其插件 -->
+    <script src="https://unpkg.com/wavesurfer.js@7"></script>
+    <script src="https://unpkg.com/wavesurfer.js@7/dist/plugins/regions.min.js"></script>
+
+    <script src="../static/js/navbar.js" defer></script>
+    <script src="../static/js/main.js" defer></script>
+    <title>page.front</title>
+</head>
+<body>
+
+<div id="navbar-container"></div>
+
+<!-- ── Side Panel ── -->
+<div class="side-overlay" id="sideOverlay"></div>
+<div class="side-panel" id="sidePanel">
+    <button class="side-close" id="sideClose">✕</button>
+    <div class="side-avatar">
+        <svg viewBox="0 0 24 24" width="48" height="48"><path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z" fill="currentColor"/></svg>
+    </div>
+    <div class="side-info">
+        <div class="side-field"><span class="side-label">名稱</span><span class="side-value" id="infoName">王小明</span></div>
+        <div class="side-field"><span class="side-label">年齡</span><span class="side-value" id="infoAge">18</span></div>
+        <div class="side-field"><span class="side-label">帳號</span><span class="side-value" id="infoAccount">user123</span></div>
+    </div>
+    <button class="side-change-pw">更改密碼</button>
+</div>
+
+<!-- ── Profile Panel Overlay ── -->
+<div class="profile-overlay" id="profileOverlay"></div>
+<div class="profile-panel" id="profilePanel">
+    <div class="profile-panel-header">
+        <span class="profile-panel-title">個人資料</span>
+        <button class="profile-close-btn" id="profileCloseBtn">✕</button>
+    </div>
+    <div class="profile-body">
+        <div class="profile-field">
+            <label>姓名</label>
+            <input type="text" id="profileName" placeholder="載入中...">
+        </div>
+        <div class="profile-field">
+            <label>年齡（歲）</label>
+            <input type="number" id="profileAge" placeholder="載入中..." min="1" max="120">
+        </div>
+        <div class="profile-field">
+            <label>帳號</label>
+            <input type="text" id="profileUsername" placeholder="載入中..." readonly style="background-color: #f0f4f8; cursor: not-allowed;">
+        </div>
+        <button class="profile-action-btn change-pwd-btn" id="changePwdBtn">修改密碼</button>
+    </div>
+    <div class="profile-footer">
+        <button class="profile-save-btn" id="profileSaveBtn">儲存變更</button>
+        <button class="profile-logout-btn" id="logoutBtn" onclick="window.location.href='/'">登出</button>
+    </div>
+</div>
+
+<div class="modal-backdrop" id="resetPwdModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 10000; align-items: center; justify-content: center;">
+    <div class="modal-card" style="background: white; padding: 30px; border-radius: 14px; width: 90%; max-width: 400px; position: relative;">
+        <button style="position: absolute; right: 15px; top: 15px; background: none; border: none; font-size: 1.2rem; cursor: pointer;" onclick="document.getElementById('resetPwdModal').style.display='none'">✕</button>
+        <h3 class="modal-title" style="margin-bottom: 20px;">修改密碼</h3>
+        <form action="/reset_password" method="POST">
+            <input type="hidden" name="username" id="resetFormUsername">
+
+            <div class="modal-field" style="margin-bottom: 15px; text-align: left;">
+                <label style="font-size: 0.8rem; font-weight: bold; color: #8898b0;">新密碼</label>
+                <input type="password" name="new_password" required style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 8px; margin-top: 5px; box-sizing: border-box;">
+            </div>
+            <div class="modal-field" style="margin-bottom: 20px; text-align: left;">
+                <label style="font-size: 0.8rem; font-weight: bold; color: #8898b0;">確認新密碼</label>
+                <input type="password" name="confirm_password" required style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 8px; margin-top: 5px; box-sizing: border-box;">
+            </div>
+            <button type="submit" class="profile-save-btn">確認變更密碼</button>
+        </form>
+    </div>
+</div>
+
+
+
+<!-- ── Toast ── -->
+<div class="toast" id="toast"></div>
+
+<!-- ── App Layout ── -->
+<div class="app-container">
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+        <div class="sidebar-header">
+            <div class="header-text-info">
+                <h3>練習紀錄</h3>
+            </div>
+            <div class="plus-dropdown">
+                    <button onclick="createNewProject('new')">+</button>
+                    <button id="retryCurrentBtn" onclick="createNewProject('retry')">🔄</button>
+            </div>
+        </div>
+        <ul class="history-list" id="historyList">
+            <li class="history-item muted">尚無練習紀錄</li>
+        </ul>
+    </aside>
+
+    <!-- Main Chat -->
+    <main class="main-chat">
+
+        <!-- Chat Header -->
+        <header class="chat-header">
+            <span class="chat-title" id="chatTitle">選擇文章開始練習</span>
+            <div class="reading-count-wrapper">
+                <select class="reading-count-btn" id="attemptDropdown">
+                    <option>請選擇文章</option>
+                </select>
+
+            </div>
+        </header>
+
+        <!-- Step Navigator -->
+        <div class="step-nav">
+            <button class="step-arrow" id="prevArrow" disabled>&#9664;</button>
+            <div class="step-indicators">
+                <div class="step-dot active" data-step="0">
+                    <div class="step-circle">1</div>
+                    <span class="step-label">選擇文章</span>
+                </div>
+                <div class="step-line"></div>
+                <div class="step-dot" data-step="1">
+                    <div class="step-circle">2</div>
+                    <span class="step-label">錄音練習</span>
+                </div>
+                <div class="step-line"></div>
+                <div class="step-dot" data-step="2">
+                    <div class="step-circle">3</div>
+                    <span class="step-label">評分結果</span>
+                </div>
+            </div>
+            <button class="step-arrow" id="nextArrow">&#9654;</button>
+        </div>
+
+        <!-- Step Content -->
+        <div class="step-content">
+
+            <!-- ── Step 1: Select Article ── -->
+            <div class="step-panel active" id="panel-0">
+                <div class="upload-section">
+                    <h2 class="upload-title">上傳要朗讀的文章</h2>
+
+                    <div class="section-divider"><span>請上傳txt檔案</span></div>
+
+                    <div class="upload-area" id="uploadArea">
+                        <div class="upload-icon-wrap">
+                            <svg viewBox="0 0 48 48" width="40" height="40">
+                                <path d="M24 6v28M12 18l12-12 12 12" stroke="currentColor" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+                                <path d="M8 38h32" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+                            </svg>
+                        </div>
+                        <p class="upload-hint">上傳 <strong>.txt</strong> 文章至此</p>
+                        <label class="upload-file-label">
+                            選擇檔案
+                            <input type="file" accept=".txt" id="fileInput">
+                        </label>
+                        <p class="upload-sub">每段以空行（Enter × 2）分隔</p>
+                    </div>
+
+                    <div class="selected-preview" id="selectedPreview">
+                        <div class="preview-header">
+                            <span class="preview-title-text" id="previewTitle"></span>
+                            <button id="clearBtn" class="clear-btn">清除</button>
+                        </div>
+                        <div class="preview-body" id="previewContent"></div>
+                    </div>
+
+                    <button class="primary-btn start-btn" id="startBtn" disabled>
+                        開始練習 →
+                    </button>
+                </div>
+            </div>
+
+            <!-- ── Step 2: Recording ── -->
+            <div class="step-panel" id="panel-1">
+                <div class="record-section">
+                    <div class="para-sidebar" >
+                        <div class="paragraph-progress" id="paragraphProgress">段落 1 / 4</div>
+
+                        <div class="para-overview-strip" id="paraOverviewStrip"></div>
+                    </div>
+
+
+                    <div class="record-content">
+                        <div class="record-main">
+                            <div class="lyrics-wrapper">
+                                <div class="select-function" id="function">
+                                    <div class="sf-btn-group">
+                                        <button class="sf-btn" id="ttsBtn" title="朗讀當前段落">
+                                            <span class="sf-btn-icon">🔊</span>
+                                            <span class="sf-btn-label">朗讀</span>
+                                        </button>
+                                        <button class="sf-btn" id="maskBtn" title="遮擋字幕">
+                                            <span class="sf-btn-icon">🙈</span>
+                                            <span class="sf-btn-label">遮擋</span>
+                                        </button>
+                                    </div>
+
+                                    
+                                </div>
+
+                                <div class="lyrics-view" id="lyricsView"></div>
+
+                                <!-- 遮擋後顯示的圖片區（三張正方形） -->
+                                <div class="mask-image-area" id="maskImageArea">
+                                    <div class="mask-img-slot" id="maskSlot0"></div>
+                                    <div class="mask-img-slot" id="maskSlot1"></div>
+                                    <div class="mask-img-slot" id="maskSlot2"></div>
+                                </div>
+                            </div>
+
+                            <div class="record-controls">
+                                <div class="timer-display" id="recordTimer">00:00</div>
+
+                                <div class="record-btn-row" style="display: flex; gap: 12px; justify-content: center; align-items: center; margin-bottom: 20px;">
+                                    <button class="record-btn" id="recordBtn">
+                                        <span class="record-dot-anim"></span>
+                                        <span id="recordBtnText">開始錄音</span>
+                                    </button>
+
+                                    <button class="secondary-btn" id="clearRecordBtn" onclick="clearCurrentProgress()" style="display: none; background: #fdf2f2; color: #ec5858; border: 1.5px solid #f5c6c6; padding: 12px 18px; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 0.9rem;">
+                                        🗑️ 全部重錄
+                                    </button>
+                                </div>
+
+                                <div class="playback-row" id="playbackRow">
+                                    <div class="playback-header">
+                                        <span class="playback-label">錄音回放 (點擊波形可指定位置播放)</span>
+                                        <span id="current-time-display" class="region-time-display">00:00 / 00:00</span>
+                                    </div>
+
+                                    <div id="waveform" class="waveform-container" style="cursor: pointer;"></div>
+
+                                    <div class="wave-actions">
+                                        <button id="playPauseWaveBtn" class="wave-btn">▶ 播放 / 暫停</button>
+                                        <button id="stopWaveBtn" class="wave-btn">⏹ 停止</button>
+                                    </div>
+
+                                    <audio id="playbackAudio" style="display:none;"></audio>
+                                </div>
+
+                                <div style="display: flex; gap: 16px; width: 100%; max-width: 400px; margin: 0 auto;">
+                                    <button class="primary-btn upload-audio-btn" id="uploadAudioBtn" onclick="uploadAudio()" style="flex: 1; margin: 0;">
+                                        ✓ 上傳並繼續
+                                    </button>
+
+                                    <button class="secondary-btn" id="skipToResultBtn" onclick="settleAndShowReport()" style="flex: 1; background: #f5f3ff; color: #7c3aed; border: 1.5px solid #ddd6fe; padding: 12px 18px; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 0.95rem; display: flex; align-items: center; justify-content: center; gap: 6px;">
+                                        📊 提早看報告
+                                    </button>
+                                </div>
+                            </div>
+                        </div>    
+                    </div>
+                </div>
+            </div>
+
+            <!-- ── Step 3: Score (Placeholder) ── -->
+            <div class="step-panel" id="panel-2" style="width: 100% !important;">
+                <div class="score-section" style="width: 100% !important; max-width: 1000px; margin: 0 auto; padding: 20px; display: flex; flex-direction: column; gap: 24px; box-sizing: border-box;">
+
+                    <div class="wer-legend" style="background: #fafafa; border: 1px solid #e2e8f0; padding: 12px 20px; border-radius: 12px; font-size: 0.85rem; width: 100%; box-sizing: border-box;">
+                        <div style="display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; align-items: center;">
+                            <strong style="color: #4a5568; margin-right: 4px;">診斷狀態圖例：</strong>
+                            <div style="display: flex; align-items: center;"><span style="display:inline-block; width:10px; height:10px; background:#4ade80; border-radius:3px; margin-right:6px;"></span>正確 (Match)</div>
+                            <div style="display: flex; align-items: center;"><span style="display:inline-block; width:10px; height:10px; background:#9ca3af; border-radius:3px; margin-right:6px; text-decoration: line-through;"></span>漏讀 (Delete)</div>
+                            <div style="display: flex; align-items: center;"><span style="display:inline-block; width:10px; height:10px; background:#f87171; border-radius:3px; margin-right:6px;"></span>讀錯 (Sub)</div>
+                            <div style="display: flex; align-items: center;"><span style="display:inline-block; width:10px; height:10px; background:#fb923c; border-radius:3px; margin-right:6px;"></span>結巴 (Rep)</div>
+                            <div style="display: flex; align-items: center;"><span style="display:inline-block; width:10px; height:10px; background:#f472b6; border-radius:3px; margin-right:6px;"></span>嘗試 (Attempt)</div>
+                            <div style="display: flex; align-items: center;"><span style="display:inline-block; width:10px; height:10px; background:#a78bfa; border-radius:3px; margin-right:6px;"></span>重啟 (Restart)</div>
+                        </div>
+                    </div>
+
+                    <div style="width: 100%; text-align: left; margin-top: 10px;">
+                        <h3 style="color: #1f2937; margin: 0; font-size: 1.15rem; border-left: 4px solid #e63946; padding-left: 10px; font-weight: bold;">
+                            逐段朗讀細節與音檔回放
+                        </h3>
+                    </div>
+
+                    <div id="werParagraphsContainer" style="display: flex; flex-direction: column; gap: 14px; width: 100% !important; box-sizing: border-box;">
+                        <div style="background: #fff; border: 1px solid #e2e8f0; padding: 40px; border-radius: 12px; text-align: center; width: 100%; box-sizing: border-box;">
+                            <p style="color: #999; margin: 0; font-size: 0.95rem;">暫無分析資料，請先錄音並點擊結算。 🎉</p>
+                        </div>
+                    </div>
+
+                    <div class="wer-score-banner" style="background: linear-gradient(135deg, #fff5f5 0%, #ffe3e3 100%); border: 2px solid #ffa3a3; padding: 22px 26px; border-radius: 16px; box-shadow: 0 4px 15px rgba(230, 57, 70, 0.05); width: 100% !important; box-sizing: border-box; margin-top: 20px;">
+                        <h2 style="color: #e63946; margin: 0 0 18px 0; font-size: 1.2rem; text-align: left; border-left: 4px solid #e63946; padding-left: 8px; font-weight: bold;">📊 總體朗讀流暢度結算看板 (Total 平均)</h2>
+
+                        <div style="display: flex; gap: 16px; align-items: center; justify-content: space-between; flex-wrap: wrap;">
+                            <div style="background: white; padding: 12px 10px; border-radius: 10px; border: 1px solid #ffd1d1; flex: 1; min-width: 140px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
+                                <span style="color: #666; font-size: 0.8rem; display: block;">總平均字錯率 (WER)</span>
+                                <strong id="werScoreText" style="color: #e63946; font-size: 2.2rem; display: block; margin-top: 5px; font-weight: bold;">0.0%</strong>
+                            </div>
+                            <div style="background: white; padding: 12px 10px; border-radius: 10px; border: 1px solid #ffd1d1; flex: 1; min-width: 110px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
+                                <span style="color: #666; font-size: 0.8rem; display: block;">總錯誤標記數</span>
+                                <strong id="werErrorCount" style="color: #fb923c; font-size: 1.8rem; display: block; margin-top: 5px; font-weight: bold;">0</strong>
+                            </div>
+                            <div style="background: white; padding: 12px 10px; border-radius: 10px; border: 1px solid #ffd1d1; flex: 1; min-width: 110px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
+                                <span style="color: #666; font-size: 0.8rem; display: block;">總讀出字數</span>
+                                <strong id="werTotalWords" style="color: #333; font-size: 1.8rem; display: block; margin-top: 5px; font-weight: bold;">0</strong>
+                            </div>
+
+                            <div style="background: white; padding: 12px 10px; border-radius: 10px; border: 1px solid #ffd1d1; flex: 1; min-width: 110px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
+                                <span style="color: #666; font-size: 0.8rem; display: block;">平均 nPVI</span>
+                                <strong id="werAvgNpvi" style="color: #2563eb; font-size: 1.8rem; display: block; margin-top: 5px; font-weight: bold;">0.00</strong>
+                            </div>
+
+                            <div style="background: white; padding: 12px 10px; border-radius: 10px; border: 1px solid #ffd1d1; flex: 1; min-width: 110px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
+                                <span style="color: #666; font-size: 0.8rem; display: block;">平均 Varco</span>
+                                <strong id="werAvgVarco" style="color: #10b981; font-size: 1.8rem; display: block; margin-top: 5px; font-weight: bold;">0.00</strong>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+        </div><!-- end .step-content -->
+    </main>
+</div><!-- end .app-container -->
+
+</body>
+</html>

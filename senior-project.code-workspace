@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"path": "../../../senior-project"
+		},
+		{
+			"path": "."
+		}
+	],
+	"settings": {
+		"liveServer.settings.multiRootWorkspaceName": "AI_ENpractice"
+	}
+}
