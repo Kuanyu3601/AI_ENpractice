@@ -91,9 +91,15 @@
 <div class="app-container">
 
     <!-- Sidebar -->
-    <aside class="sidebar">
+    <aside class="sidebar" id="sidebar">
         <div class="sidebar-header">
             <div class="header-text-info">
+                
+                <!-- 💡 隱藏側欄按鈕：可放圖示，目前先用文字符號 ‹ 當預設樣式 -->
+                <button class="sidebar-toggle-btn" id="sidebarHideBtn" onclick="toggleSidebar()" title="隱藏練習紀錄" type="button">
+                    <img class="sidebar-toggle-icon" id="sidebarHideIcon" src="" alt="" />
+                    <span class="sidebar-toggle-fallback">‹</span>
+                </button>
                 <h3>練習紀錄</h3>
             </div>
             <div class="plus-dropdown">
@@ -105,6 +111,12 @@
             <li class="history-item muted">尚無練習紀錄</li>
         </ul>
     </aside>
+
+    <!-- 💡 側欄收合後，左上角顯示這顆按鈕用來重新展開 -->
+    <button class="sidebar-show-btn" id="sidebarShowBtn" onclick="toggleSidebar()" title="展開練習紀錄" type="button">
+        <img class="sidebar-toggle-icon" id="sidebarShowIcon" src="" alt="" />
+        <span class="sidebar-toggle-fallback">›</span>
+    </button>
 
     <!-- Main Chat -->
     <main class="main-chat">

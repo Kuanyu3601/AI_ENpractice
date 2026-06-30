@@ -1,5 +1,37 @@
 console.log('[main.js v3] ✓ 已載入');
 
+function toggleSidebar() {
+    const sidebar     = document.getElementById('sidebar');
+    const showBtn     = document.getElementById('sidebarShowBtn');
+    if (!sidebar) return;
+ 
+    const collapsed = sidebar.classList.toggle('is-collapsed');
+ 
+    if (showBtn) {
+        showBtn.classList.toggle('is-visible', collapsed);
+    }
+ 
+    // 記住使用者的選擇，下次開啟頁面時維持同樣狀態
+    try {
+        localStorage.setItem('sidebarCollapsed', collapsed ? '1' : '0');
+    } catch (e) { /* 忽略無痕模式等例外狀況 */ }
+}
+ 
+// 💡 頁面載入時還原使用者上次的收合狀態
+document.addEventListener('DOMContentLoaded', () => {
+    let wasCollapsed = false;
+    try {
+        wasCollapsed = localStorage.getItem('sidebarCollapsed') === '1';
+    } catch (e) { /* 忽略 */ }
+ 
+    if (wasCollapsed) {
+        const sidebar = document.getElementById('sidebar');
+        const showBtn = document.getElementById('sidebarShowBtn');
+        if (sidebar) sidebar.classList.add('is-collapsed');
+        if (showBtn) showBtn.classList.add('is-visible');
+    }
+});
+
 // Kitten's_Choice 各段提示圖片設定
 // 格式：每個段落（索引0, 1, 2...）對應三張圖片的路徑
 // 請把 src 換成你實際的檔案路徑
@@ -27,6 +59,33 @@ var KITTENS_CHOICE_HINTS = [
         { src: '/static/image/hint/kitten_401.webp', alt: '段落4 提示A' },
         { src: '/static/image/hint/kitten_402.webp', alt: '段落4 提示B' },
         { src: '/static/image/hint/kitten_403.webp', alt: '段落4 提示C' },
+    ],
+];
+
+var SHARKS_HINTS = [
+    // 段落 1（index 0）
+    [
+        { src: '/static/image/hint/shark_101.webp', alt: '段落1 提示A' },
+        { src: '/static/image/hint/shark_102.webp', alt: '段落1 提示B' },
+        { src: '/static/image/hint/shark_103.webp', alt: '段落1 提示C' },
+    ],
+    // 段落 2（index 1）
+    [
+        { src: '/static/image/hint/shark_201.webp', alt: '段落2 提示A' },
+        { src: '/static/image/hint/shark_202.webp', alt: '段落2 提示B' },
+        { src: '/static/image/hint/shark_203.webp', alt: '段落2 提示C' },
+    ],
+    // 段落 3（index 2）
+    [
+        { src: '/static/image/hint/shark_301.webp', alt: '段落3 提示A' },
+        { src: '/static/image/hint/shark_302.webp', alt: '段落3 提示B' },
+        { src: '/static/image/hint/shark_303.webp', alt: '段落3 提示C' },
+    ],
+    // 段落 4（index 3）
+    [
+        { src: '/static/image/hint/shark_401.webp', alt: '段落4 提示A' },
+        { src: '/static/image/hint/shark_402.webp', alt: '段落4 提示B' },
+        { src: '/static/image/hint/shark_403.webp', alt: '段落4 提示C' },
     ],
 ];
 
@@ -1808,36 +1867,47 @@ function _updateMaskSlots(paraIndex) {
     ];
     if (!slots[0]) return;
 
-    // 💡 終極防禦 1：強行修正數字。如果傳進來的 paraIndex 是 NaN、undefined 或小於 0，強制校正回 0
     let safeIdx = parseInt(paraIndex, 10);
-    if (isNaN(safeIdx) || safeIdx < 0) {
-        console.warn(`[遮擋警告] 偵測到不合法的段落索引: ${paraIndex}，已自動強制校正為 0`);
-        safeIdx = 0;
+    if (isNaN(safeIdx) || safeIdx < 0) safeIdx = 0;
+
+    const articleTitleRaw = (document.getElementById('chatTitle')?.textContent || '').trim();
+    // 💡 全部轉小寫再比對，避免大小寫不一致造成誤判
+    const titleLower = articleTitleRaw.toLowerCase();
+
+    const isKitten = titleLower.includes("kitten's_choice") || titleLower.includes("kitten's choice") || titleLower.includes("kitten");
+    const isShark  = titleLower.includes("sharks") || titleLower.includes("shark");
+
+    // 💡 容錯：同時支援 _p2 / -p2 / p2 (前面接底線、減號或空白)
+    const paraMatch = articleTitleRaw.match(/[_\-\s]p(\d+)/i) || articleTitleRaw.match(/[_\-\s]s(\d+)/i);
+
+    console.log('[除錯] 原始標題:', JSON.stringify(articleTitleRaw));
+    console.log('[除錯] isKitten:', isKitten, ' isShark:', isShark);
+    console.log('[除錯] paraMatch:', paraMatch);
+
+    if (paraMatch) {
+        safeIdx = parseInt(paraMatch[1], 10) - 1;
+        console.log(`[遮擋提示] 標題指定強制段落 p${paraMatch[1]}，索引鎖定為 ${safeIdx}`);
     }
 
-    // 💡 終極防禦 2：防止陣列越界。如果你的文章段落很多（例如第 5 段），但圖片只有 4 段，強制循環讀取或停在最後一段
-    if (safeIdx >= KITTENS_CHOICE_HINTS.length) {
-        console.warn(`[遮擋提示] 當前段落索引 ${safeIdx} 超出圖片庫範圍，自動回溯使用最後一組圖片`);
-        safeIdx = KITTENS_CHOICE_HINTS.length - 1;
+    let hintSet = [];
+
+    if (isKitten) {
+        let idx = safeIdx;
+        if (idx < 0 || idx >= KITTENS_CHOICE_HINTS.length) idx = KITTENS_CHOICE_HINTS.length - 1;
+        hintSet = KITTENS_CHOICE_HINTS[idx] || [];
+    } else if (isShark) {
+        let idx = safeIdx;
+        if (idx < 0 || idx >= SHARKS_HINTS.length) idx = SHARKS_HINTS.length - 1;
+        hintSet = SHARKS_HINTS[idx] || [];
+    } else {
+        console.warn('[遮擋警告] 標題既不符合 Kitten 也不符合 Shark，hintSet 為空');
     }
 
-    // 安全地撈出圖片集，絕對不會拿到 undefined 導致空陣列
-    //const hintSet = KITTENS_CHOICE_HINTS[safeIdx] || KITTENS_CHOICE_HINTS[0] || [];
-
-    // 💡 修改後：檢查目前標題有沒有包含 Kitten 關鍵字
-    const articleTitle = (document.getElementById('chatTitle')?.textContent || '').trim();
-    const isKitten = articleTitle.includes("Kitten's_Choice") || articleTitle.includes("Kitten's Choice") || articleTitle.includes("Kitten");
-
-    // 如果是 Kitten 文章才去抓圖片集；其他自訂文章（isKitten 為 false）則給予空陣列 []
-    const hintSet = isKitten ? (KITTENS_CHOICE_HINTS[safeIdx] || []) : [];
-
-    console.log(`[遮擋觸發] 當前正在渲染第 ${safeIdx + 1} 段的圖片集，資料長度: ${hintSet.length}`);
+    console.log(`[遮擋觸發] 最終使用段落索引:${safeIdx} 圖片數量: ${hintSet.length}`, hintSet);
 
     slots.forEach((slot, i) => {
         if (!slot) return;
         const imgData = hintSet[i] || null;
-
-        // 清空舊內容
         while (slot.firstChild) slot.removeChild(slot.firstChild);
 
         if (imgData && imgData.src) {
@@ -1847,16 +1917,12 @@ function _updateMaskSlots(paraIndex) {
             img.style.width = '100%';
             img.style.height = '100%';
             img.style.objectFit = 'cover';
-
-            // 💡 加上錯誤監聽：如果路徑意外 404，直接在網頁畫面上告訴你，不讓你瞎猜！
             img.onerror = function() {
-                console.error(`❌ 圖片載入失敗！請檢查專案資料夾中是否存在此路徑: ${this.src}`);
+                console.error(`❌ 圖片載入失敗！路徑: ${this.src}`);
                 slot.innerHTML = `<div style="font-size:0.65rem; color:#e63946; padding:5px; word-break:break-all;">圖片404<br>${this.src.substring(this.src.lastIndexOf('/'))}</div>`;
             };
-
             slot.appendChild(img);
         } else {
-            // 💡 終極防禦 3：如果沒圖，改用顯眼的紅色和文字，逼迫瀏覽器必須撐開它，方便你除錯
             const ph = document.createElement('div');
             ph.className = 'mask-img-placeholder';
             ph.style.cssText = 'color: #e63946 !important; font-size: 1.2rem !important; font-weight: bold;';

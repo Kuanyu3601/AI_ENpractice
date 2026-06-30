@@ -19,6 +19,7 @@ services:
     volumes:
       - ./models:/root/.cache/whisper
 
+<<<<<<< HEAD
   backend-npvi:   
     image: speech-api:v1  # 🚀【核心更換】：換成組員給的新網站映像檔名字
     container_name: backend-npvi-1
@@ -32,3 +33,6 @@ services:
       - D:\AI_ENpractice\kids_recordings:/app/data
 volumes:
   shared-data:
+=======
+  
+>>>>>>> f047b84 (hint & practice record)
