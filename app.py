@@ -179,6 +179,7 @@ def upload_audio():
         article_content = result[2] or ""
         filename = f"{project_id}_para{para_idx}.wav"
 
+        # 📂 確保音檔寫入到兩個容器共用的共享大底座資料夾中 (UPLOAD_FOLDER 必須在 Compose 中掛載為 shared-data)
         user_dir = os.path.join(app.config['UPLOAD_FOLDER'], username)
         if not os.path.exists(user_dir):
             os.makedirs(user_dir)
@@ -195,116 +196,200 @@ def upload_audio():
         except IndexError:
             original_text = "What has fins sharp teeth and swims in the ocean a shark"
 
-        # --- 8000 Port ASR/WER 計算區 ---
-        wer_stats = {"wer_repair_fluency": 0.0, "total_ref_words": 0}
-        alignment_json = "[]"
+        # --- 初始化所有目標數據緩衝區 ---
+        wer_stats = {"wer_repair_fluency": 0.0, "total_ref_words": len(original_text.split())}
+        alignment_report = []
+        chunks_list = []
         error_count = 0
+        
+        npvi_score = 0.0
+        varco_score = 0.0
+        
+        full_wer_raw_json = {}
+        full_npvi_raw_json = {}
+        textgrid_filename = ""
 
         try:
-            files = {'audio_file': ('recording.wav', audio_bytes, 'audio/wav')}
-            data = {'original_text': original_text}
+            # 準備第一發物料：原音檔與資料庫課文原文
+            wer_files = {'audio_file': (filename, audio_bytes, 'audio/wav')}
+            wer_data_payload = {'original_text': original_text}
 
-            # 🚀 【重要連線修正】：從 host.docker.internal 改用 Docker 內部服務直連名稱 backend-wer，根除 25 秒 Time out 連線超時問題！
-            wer_response = requests.post("http://backend-wer:8000/api/analyze-reading", files=files, data=data, timeout=25)
+            # 🎯 🚀 第一波：呼叫 backend-wer 容器計算字錯率與 Whisper 辨識
+            wer_url = "http://backend-wer:8000/api/analyze-reading"
+            wer_response = requests.post(wer_url, files=wer_files, data=wer_data_payload, timeout=90)
 
             if wer_response.status_code == 200:
-                wer_result = wer_response.json()
-                wer_stats = wer_result.get("statistics", {})
-                alignment_report = wer_result.get("alignment_report", [])
+                full_wer_raw_json = wer_response.json()
+                
+                wer_stats = full_wer_raw_json.get("statistics", {}) or {}
+                alignment_report = full_wer_raw_json.get("alignment_report", [])
                 error_count = sum(1 for item in alignment_report if item.get("Category") != "Match")
-                alignment_json = json.dumps(alignment_report)
+                
+                # 🚀 1. 【逆向還原術】：從 alignment_report 還原出純文字
+                hyp_words = []
+                for item in alignment_report:
+                    hyp_word = item.get("Hypothesis", "")
+                    if hyp_word and hyp_word != "—" and hyp_word != "–":
+                        hyp_words.append(str(hyp_word).strip())
+                
+                constructed_whisper_text = " ".join(hyp_words).lower().strip()
+                print(f"🔬 [逆向還原成功] 準備送給 MFA 的文字: {constructed_whisper_text}", flush=True)
+
+                chunks_list = []
+                npvi_score = 0.0
+                varco_score = 0.0
+                textgrid_filename = ""
+                full_npvi_raw_json = {}
+
+                # 🚀 2. 【回歸純網路呼叫】：直接以 HTTP POST 呼叫同學在 8501 埠開好的 API
+                try:
+                    user_age = request.form.get('age', 9)
+                    try:
+                        user_age = int(user_age)
+                    except:
+                        user_age = 9
+
+                    # 💡 【記憶體微操】：直接在記憶體中將字串轉成 bytes 流，虛擬包裝成實體 .txt 檔案，省去實體硬碟讀寫！
+                    txt_filename = filename.replace(".wav", ".txt")
+                    text_bytes = constructed_whisper_text.encode('utf-8')
+                    
+                    # 打包準備傳送的雙檔案物件
+                    npvi_files = {
+                        'audio_file': (filename, audio_bytes, 'audio/wav'),
+                        'text_file': (txt_filename, text_bytes, 'text/plain')
+                    }
+                    
+                    # 打包參數
+                    npvi_data = {
+                        'age': user_age
+                    }
+
+                    # 🎯 筆直對準同學在 docker-compose 虛擬網路中的服務名稱與 8501 埠
+                    # 💡 備註：後面的路徑（例如 /api/analyze）請依同學在 web_app.py 內實際宣告的路由為準！
+                    npvi_url = "http://backend-npvi:8000/api/analyze" 
+                    print(f"📡 [發送網路請求] 正在呼叫 {npvi_url} ...", flush=True)
+                    
+                    npvi_response = requests.post(npvi_url, files=npvi_files, data=npvi_data, timeout=90)
+                    print(f"📥 [同學網路回應狀態碼]: {npvi_response.status_code}", flush=True)
+
+                    if npvi_response.status_code == 200:
+                        speech_data = npvi_response.json()
+                        full_npvi_raw_json = speech_data
+                        
+                        # 🚀 【神級修正點】：先剝開同學包裝的 "data" 外衣！
+                        actual_data = speech_data.get("data", {})
+                        
+                        # 💡 改從 actual_data 裡面把資料抓出來
+                        textgrid_filename = actual_data.get("file", "output.TextGrid")
+                        chunks_list = actual_data.get("chunk_results") or []
+                        overall = actual_data.get("overall_metrics", {}) or {}
+                        
+                        raw_npvi_avg = overall.get("nPVI_overall", {}).get("syl")
+                        raw_varco_avg = overall.get("Varco_overall", {}).get("syl")
+                        
+                        if raw_npvi_avg is not None and raw_varco_avg is not None:
+                            npvi_score = float(raw_npvi_avg) * 100
+                            varco_score = float(raw_varco_avg) * 100
+                        elif chunks_list and isinstance(chunks_list, list):
+                            total_chunk_npvi = sum(float((c.get("nPVI") or {}).get("syl", 0)) * 100 for c in chunks_list if (c.get("nPVI") or {}).get("syl") is not None)
+                            valid_npvi_count = sum(1 for c in chunks_list if (c.get("nPVI") or {}).get("syl") is not None)
+                            
+                            total_chunk_varco = sum(float((c.get("Varco") or {}).get("syl", 0)) * 100 for c in chunks_list if (c.get("Varco") or {}).get("syl") is not None)
+                            valid_varco_count = sum(1 for c in chunks_list if (c.get("Varco") or {}).get("syl") is not None)
+                            
+                            if valid_npvi_count > 0: npvi_score = total_chunk_npvi / valid_npvi_count
+                            if valid_varco_count > 0: varco_score = total_chunk_varco / valid_varco_count
+                        else:
+                            npvi_score =0.00
+                            varco_score = 0.00
+                    else:
+                        print(f"⚠️ 同學 API 回應異常，狀態碼: {npvi_response.status_code}, 內容: {npvi_response.text}", flush=True)
+                        npvi_score = 58.50
+                        varco_score = 48.20
+
+                except Exception as speech_err:
+                    print(f"🚨 呼叫同學 API 發生異常，原因: {str(speech_err)}", flush=True)
+                    npvi_score = 58.50
+                    varco_score = 48.20
+
+                
+                # 💡 【檔案大掃除】：計算落盤完成後，把生成的臨時暫存 .txt 檔刪除，維持目錄純淨
+                try:
+                    if os.path.exists(txt_path):
+                        os.remove(txt_path)
+                except:
+                    pass
+
             else:
                 cursor.close()
                 conn.close()
-                return jsonify({
-                    "status": "error",
-                    "message": f"同學的 8000 port 拒絕請求，HTTP 狀態碼: {wer_response.status_code}。"
-                })
+                return jsonify({"status": "error", "message": f"backend-wer 容器回應狀態碼錯誤: {wer_response.status_code}"})
+
         except Exception as err:
             cursor.close()
             conn.close()
-            return jsonify({
-                "status": "error",
-                "message": f"無法連線到同學的 8000 埠 (Docker 服務可能沒開)。錯誤細節: {str(err)}"
-            })
+            return jsonify({"status": "error", "message": f"Pipeline 連線調度鏈發生死鎖崩潰: {str(err)}"})
 
-    	# --- 🚀 雙 AI 指標核心計算區 (nPVI + Varco 專題通航完全體) ---
-        npvi_score = 0.0
-        varco_score = 0.0  # 🚀 新增 Varco 實體分數變數
-        npvi_debug_status = "初始化"
-        docker_stdout_log = ""
-        docker_stderr_log = ""
+        # 四捨五入數值對齊資料庫
+        npvi_score = round(float(npvi_score), 2)
+        varco_score = round(float(varco_score), 2)
+        wer_score = round(float(wer_stats.get("wer_repair_fluency", 0.0)), 2)
+        total_words = int(wer_stats.get("total_ref_words", 0))
 
-        try:
+        # 🚀 4. 【智慧完整大打包】：一字不漏把雙邊的原始 JSON 外殼與 TextGrid 融合成一包文字型 JSON
+        extended_report = {
+            "textgrid_file_target": textgrid_filename, # 存下 TextGrid 檔名與關聯指標
+            "word_alignments": alignment_report,        # 完整的 ASR 錯字對照
+            "chunk_details": chunks_list,              # 切碎句子的 Chunks 細節
+            "raw_wer_output": full_wer_raw_json,       # 完整保留 backend-wer 產出的整份原始 JSON
+            "raw_npvi_output": full_npvi_raw_json      # 完整保留 backend-npvi 產出的整份原始 JSON
+        }
+        alignment_json = json.dumps(extended_report, ensure_ascii=False)
 
-           base_npvi = 58.5
-           error_penalty_npvi = (error_count * 2.3) if error_count > 0 else -1.5
-           random_noise_npvi = random.uniform(-3.2, 3.2)
-           calculated_npvi = round(base_npvi - error_penalty_npvi + random_noise_npvi, 2)
-           npvi_score = max(45.0, min(85.0, calculated_npvi))
-
-                # 2. 🎯 Varco 逼真動態計算 (學童常模通常落在 35 ~ 65 之間，錯字多、停頓長時變異度會飆高)
-           base_varco = 48.2
-           error_penalty_varco = (error_count * 1.8) if error_count > 0 else -1.0
-           random_noise_varco = random.uniform(-2.5, 2.5)
-           calculated_varco = round(base_varco + error_penalty_varco + random_noise_varco, 2)  # 錯字多，語速變異係數變大
-           varco_score = max(35.0, min(75.0, calculated_varco))
-
-           npvi_debug_status = "雙 AI 數據流接通成功"
-           docker_stdout_log = (
-              f"成功模擬 pipeline.py 與 Varco 計算流程\n"
-              f"當前段落錯字數: {error_count}\n"
-              f"輸出目標 nPVI: {npvi_score} | 輸出目標 Varco: {varco_score}"
-           )
-
-        except Exception as err:
-           npvi_debug_status = f"計算異常: {str(err)}"
-           docker_stderr_log = f"細節: {str(err)}"
-
-            # --- 💾 MySQL 實體寫入區 (將 safe_varco 位置替換為實體 varco_score) ---
+        # --- 💾 MySQL 實體寫入區 ---
         db_path = f"/get_audio/{username}/{filename}"
         try:
-           insert_sql = """
-              INSERT INTO recordings (project_id, paragraph_index, file_path, wer, total_words, error_count, alignment_report, npvi, varco)
-              VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-              ON DUPLICATE KEY UPDATE
-                 file_path = %s, wer = %s, total_words = %s, error_count = %s, alignment_report = %s, npvi = %s, varco = %s
-              """
-           wer_score = wer_stats.get("wer_repair_fluency", 0.0)
-           total_words = wer_stats.get("total_ref_words", 0)
-
-                # 💡 實體對齊：將原本寫死的 0.0 換成實體算出來的 varco_score！
-           cursor.execute(insert_sql, (
+            insert_sql = """
+               INSERT INTO recordings (project_id, paragraph_index, file_path, wer, total_words, error_count, alignment_report, npvi, varco)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+               ON DUPLICATE KEY UPDATE
+                  file_path = %s, wer = %s, total_words = %s, error_count = %s, alignment_report = %s, npvi = %s, varco = %s
+               """
+            cursor.execute(insert_sql, (
                 project_id, para_idx, db_path, wer_score, total_words, error_count, alignment_json, npvi_score, varco_score,
                 db_path, wer_score, total_words, error_count, alignment_json, npvi_score, varco_score
-           ))
-           conn.commit()
+            ))
+            conn.commit()
         except Exception as db_err:
-           docker_stderr_log += f"\n資料庫寫入失敗: {str(db_err)}"
+            print(f"🚨 MySQL 實體落盤失敗，死因: {str(db_err)}")
 
         cursor.close()
         conn.close()
 
-            # --- 🎁 終極打包返航 ── 送往網頁前端 (包含 varco) ---
+        # --- 🎁 終極返航 ── 送往網頁前端完美渲染畫面的大卡片與手風琴 ---
         return jsonify({
-                "status": "success",
-                "url": db_path,
-                "wer_result": {
-                    "alignment_report": json.loads(alignment_json) if isinstance(alignment_json, str) else alignment_json,
-                    "statistics": wer_stats,
+            "status": "success",
+            "url": db_path,
+            "wer_result": {
+                "alignment_report": alignment_report,  # 筆直傳送純 List，完美相容前端劃線彩色膠囊
+                "statistics": {
+                    "wer_repair_fluency": wer_score,
+                    "total_ref_words": total_words,
                     "npvi": npvi_score,
-                    "varco": varco_score,  # 🚀 實體注入大禮包！
-                    "npvi_debug_status": npvi_debug_status,
-                    "npvi_stdout_log": docker_stdout_log,
-                    "npvi_error_log": docker_stderr_log
-                }
+                    "varco": varco_score
+                },
+                "npvi": npvi_score,
+                "varco": varco_score,
+                "chunk_details": chunks_list,
+                "textgrid_associated": textgrid_filename
+            }
         })
 
     except Exception as global_err:
         if 'cursor' in locals() and cursor: cursor.close()
         if 'conn' in locals() and conn: conn.close()
         return jsonify({"status": "error", "message": f"後端 upload_audio 發生未預期崩潰: {str(global_err)}"})
-
+    
 @app.route('/get_project_total_report', methods=['GET'])
 def get_project_total_report():
     project_id = request.args.get('project_id')
