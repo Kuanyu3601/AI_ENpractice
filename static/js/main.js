@@ -2253,10 +2253,84 @@ function renderWerReportToPanel3(alignmentReport, stats, currentParaNum = 1, bac
         console.error("❌ 即時渲染單段落失敗：", err);
     }
 }
+// 💡 全域共用的逐字稿過濾器：處理點擊 6 個按鈕後的變色邏輯
+window.switchWerFilter = function(btn, errorType, stripId) {
+    const strip = document.getElementById(stripId);
+    if (!strip) return;
 
+    // 1. 按鈕樣式切換：重置所有按鈕，高亮點擊的按鈕
+    strip.querySelectorAll('.wer-filter-btn').forEach(b => {
+        b.style.background = '#f1f5f9';
+        b.style.color = '#475569';
+    });
+    btn.style.background = '#e63946';
+    btn.style.color = '#fff';
+
+    // 2. 抓取藏在 DOM 裡的對齊資料
+    const rawData = strip.dataset.alignment;
+    if (!rawData) return;
+    
+    let alignData = [];
+    try {
+        alignData = JSON.parse(rawData);
+    } catch(e) {
+        console.error("解析對齊資料失敗", e);
+        return;
+    }
+
+    // 3. 類別名稱映射對齊（將前端按鈕名稱對應到後端 Whisper 回傳的 Category）
+    const typeMapping = {
+        'repair_repetition': 'Repair_Repetition',
+        'repair_attempt': 'Repair_Attempt',
+        'repair_restart': 'Repair_Restart',
+        'substitutions': 'Substitute',
+        'deletions': 'Delete',
+        'insertions': 'Insert'
+    };
+    const targetCategory = typeMapping[errorType];
+
+    // 4. 產生標準原文 (過濾掉沒有文字的 '—')
+    const refWords = alignData
+        .filter(item => item.Reference && item.Reference !== '—')
+        .map(item => item.Reference)
+        .join(' ');
+
+    // 5. 產生你的發音 (灰色基底，命中目標錯誤類別的變成紅色醒目)
+    const hypHTML = alignData.map(item => {
+        const cat = item.Category || item.category;
+        const hyp = item.Hypothesis || item.hypothesis || '';
+        
+        // 針對 Deletions (漏字) 做特殊視覺處理：因為沒發音，Whisper 會回傳 '—'
+        const displayWord = (hyp === '—' || !hyp) ? '[漏音]' : hyp;
+        
+        if (cat === targetCategory || cat.toLowerCase() === targetCategory.toLowerCase()) {
+            // 命中目標錯誤：醒目紅底紅字
+            return `<span style="color: #e63946; font-weight: 800; background: #fee2e2; padding: 2px 4px; border-radius: 4px; border-bottom: 2px solid #e63946;">${displayWord}</span>`;
+        } else {
+            // 其他字：如果不是 '—' 就顯示淺灰色，如果是 '—' 就隱藏保持畫面乾淨
+            return (hyp !== '—' && hyp) ? `<span style="color: #9ca3af;">${hyp}</span>` : '';
+        }
+    }).filter(Boolean).join(' ');
+
+    // 6. 渲染到畫面上
+    const displayArea = strip.querySelector('.transcript-display-area');
+    displayArea.innerHTML = `
+        <div style="flex: 1; background: #f8fafc; padding: 16px; border-radius: 8px; border: 1px solid #e2e8f0;">
+            <div style="font-size: 0.85rem; color: #64748b; margin-bottom: 8px; font-weight: bold;">📝 標準原文 (Reference)</div>
+            <div style="color: #333; font-size: 1.1rem; line-height: 1.6;">${refWords || '無資料'}</div>
+        </div>
+        <div style="flex: 1; background: #f8fafc; padding: 16px; border-radius: 8px; border: 1px solid #e2e8f0;">
+            <div style="font-size: 0.85rem; color: #64748b; margin-bottom: 8px; font-weight: bold;">🎤 你的發音 (Hypothesis)</div>
+            <div style="font-size: 1.1rem; line-height: 1.6;">${hypHTML || '<span style="color:#ccc;">(完全無發音)</span>'}</div>
+        </div>
+    `;
+};
+
+// ══════════════════════════════════════════════════
+// 📊 多段落報告總成渲染 (精準拆開資料庫大禮盒)
+// ══════════════════════════════════════════════════
 function renderMultipleParagraphsReport(paragraphList, globalStats) {
     try {
-
         if (document.getElementById('werScoreText')) {
             document.getElementById('werScoreText').innerText = globalStats ? (globalStats.wer_average * 100).toFixed(1) + '%' : '0.0%';
         }
@@ -2266,29 +2340,34 @@ function renderMultipleParagraphsReport(paragraphList, globalStats) {
         if (document.getElementById('werErrorCount')) {
             document.getElementById('werErrorCount').innerText = globalStats ? globalStats.total_errors : '0';
         }
-
-        // 🚀【動態注入大底座】：將後端 global_stats 算好的全篇總平均塞進大卡片
         if (document.getElementById('werAvgNpvi')) {
-            document.getElementById('werAvgNpvi').innerText = (globalStats && globalStats.average_npvi !== undefined && globalStats.average_npvi !== null)
-                ? parseFloat(globalStats.average_npvi).toFixed(2)
-                : '0.00';
+            document.getElementById('werAvgNpvi').innerText = (globalStats && globalStats.average_npvi != null) ? parseFloat(globalStats.average_npvi).toFixed(2) : '0.00';
         }
         if (document.getElementById('werAvgVarco')) {
-            document.getElementById('werAvgVarco').innerText = (globalStats && globalStats.average_varco !== undefined && globalStats.average_varco !== null)
-                ? parseFloat(globalStats.average_varco).toFixed(2)
-                : '0.00';
+            document.getElementById('werAvgVarco').innerText = (globalStats && globalStats.average_varco != null) ? parseFloat(globalStats.average_varco).toFixed(2) : '0.00';
         }
 
         const container = document.getElementById('werParagraphsContainer');
         if (!container) return;
-
-        // 徹底清空舊有長條
         container.innerHTML = '';
 
-        paragraphList.forEach((para) => {
+        paragraphList.forEach((para, index) => {
             const hasRecorded = para.file_path !== null && para.wer !== null;
+            const stripId = `strip-para-${para.paragraph_index}-${Date.now()}`;
+
+            // 🚀 【核心修正 1：智慧拆解大禮盒】
+            // 後端從 MySQL 的 alignment_report 欄位撈出來的，可能是一個 JSON 字串，我們必須把它 parse 成物件
+            let extendedReport = {};
+            if (para.alignment_report) {
+                if (typeof para.alignment_report === 'string') {
+                    try { extendedReport = JSON.parse(para.alignment_report); } catch(e) {}
+                } else {
+                    extendedReport = para.alignment_report;
+                }
+            }
 
             const strip = document.createElement('div');
+            strip.id = stripId;
             strip.style.background = '#fff';
             strip.style.border = '1px solid #e2e8f0';
             strip.style.borderRadius = '12px';
@@ -2298,141 +2377,175 @@ function renderMultipleParagraphsReport(paragraphList, globalStats) {
             strip.style.boxSizing = 'border-box';
             strip.style.marginBottom = '8px';
 
-            const statusBadge = hasRecorded
-                ? `<span style="color: #16a34a; font-weight: bold; background: #dcfce7; padding: 4px 12px; border-radius: 8px; font-size: 0.85rem; white-space: nowrap;">✓ 已錄音</span>`
-                : `<span style="color: #64748b; font-weight: bold; background: #f1f5f9; padding: 4px 12px; border-radius: 8px; font-size: 0.85rem; white-space: nowrap;">✕ 未錄音</span>`;
+            // 🚀 【核心修正 2：精準抓取 word_alignments 供按鈕過濾用】
+            const alignments = extendedReport.word_alignments || [];
+            if (hasRecorded && alignments.length > 0) {
+                // 將引號轉義確保 JSON 字串不會破壞 HTML 屬性結構
+                strip.setAttribute('data-alignment', JSON.stringify(alignments).replace(/'/g, "&apos;"));
+            }
+
+            // ─── 標題列 (Header) ───
+            const singleParaNpvi = (hasRecorded && para.npvi != null) ? parseFloat(para.npvi).toFixed(2) : '—';
+            const singleParaVarco = (hasRecorded && para.varco != null) ? parseFloat(para.varco).toFixed(2) : '—';
+            const statusBadge = hasRecorded 
+                ? `<span style="color: #16a34a; font-weight: bold; background: #dcfce7; padding: 4px 12px; border-radius: 8px; font-size: 0.85rem;">✓ 已錄音</span>` 
+                : `<span style="color: #64748b; font-weight: bold; background: #f1f5f9; padding: 4px 12px; border-radius: 8px; font-size: 0.85rem;">✕ 未錄音</span>`;
 
             const header = document.createElement('div');
-            header.style.padding = '18px 24px';
-            header.style.background = hasRecorded ? '#f8fafc' : '#fcfcfc';
-            header.style.display = 'flex';
-            header.style.alignItems = 'center';
-            header.style.justifyContent = 'space-between';
-            header.style.cursor = hasRecorded ? 'pointer' : 'not-allowed';
-            header.style.width = '100%';
-            header.style.boxSizing = 'border-box';
-            header.style.opacity = hasRecorded ? '1' : '0.65';
-
-
-            // 🚀 從資料庫撈出此單段的個別分數
-            const singleParaNpvi = (hasRecorded && para.npvi !== undefined && para.npvi !== null) ? parseFloat(para.npvi).toFixed(2) : '—';
-            const singleParaVarco = (hasRecorded && para.varco !== undefined && para.varco !== null) ? parseFloat(para.varco).toFixed(2) : '—';
-
+            header.style.cssText = `padding: 18px 24px; background: ${hasRecorded ? '#f8fafc' : '#fcfcfc'}; display: flex; align-items: center; justify-content: space-between; cursor: ${hasRecorded ? 'pointer' : 'not-allowed'}; opacity: ${hasRecorded ? '1' : '0.65'};`;
             header.innerHTML = `
                 <div style="display: flex; align-items: center; gap: 30px; flex: 1; flex-wrap: wrap;">
-                    <span style="font-weight: bold; color: #1f2937; min-width: 65px; font-size: 1.05rem; white-space: nowrap;">段落 ${para.paragraph_index}</span>
+                    <span style="font-weight: bold; color: #1f2937; min-width: 65px; font-size: 1.05rem;">段落 ${para.paragraph_index}</span>
                     ${statusBadge}
-                    
-                    <div style="display: flex; gap: 24px; color: #4a5568; font-size: 0.92rem; align-items: center; flex-wrap: wrap; white-space: nowrap;">
+                    <div style="display: flex; gap: 24px; color: #4a5568; font-size: 0.92rem; align-items: center; flex-wrap: wrap;">
                         <div>WER: <strong style="color: #e63946; font-size: 1.05rem;">${hasRecorded ? (para.wer * 100).toFixed(1) + '%' : '—'}</strong></div>
                         <div>錯誤數: <strong style="color: #fb923c; font-size: 1.05rem;">${hasRecorded ? para.error_count : '—'}</strong></div>
-                        <div>總字數: <strong style="color: #333; font-size: 1.05rem;">${hasRecorded ? para.total_words : '—'}</strong></div>
-                        
                         <div style="color: #4a5568; border-left: 1px solid #e2e8f0; padding-left: 16px;">nPVI: <strong style="color: #2563eb; font-size: 1.05rem;">${singleParaNpvi}</strong></div>
                         <div style="color: #4a5568;">Varco: <strong style="color: #10b981; font-size: 1.05rem;">${singleParaVarco}</strong></div>
                     </div>
                 </div>
-                <div style="display: flex; align-items: center; gap: 8px; white-space: nowrap;">
+                <div style="display: flex; align-items: center; gap: 8px;">
                     ${hasRecorded ? '<span style="color: #a0aec0; font-size: 0.85rem;">展開對照</span> <span class="arrow-icon" style="transition: transform 0.2s; color: #cbd5e1;">▼</span>' : ''}
                 </div>
             `;
 
+            // ─── 內容區塊 (Body) ───
             const body = document.createElement('div');
-            body.style.padding = '24px';
-            body.style.display = 'none';
-            body.style.background = '#ffffff';
-            body.style.borderTop = '1px solid #edf2f7';
-            body.style.flexDirection = 'column';
-            body.style.gap = '20px';
-            body.style.width = '100%';
-            body.style.boxSizing = 'border-box';
+            body.style.cssText = 'padding: 24px; display: none; background: #ffffff; border-top: 1px solid #edf2f7; flex-direction: column; gap: 24px;';
 
             if (hasRecorded) {
-                // 進行精準路徑安全過濾，並附加時間戳防止瀏覽器快取死檔
-                let cleanAudioUrl = para.file_path || '';
-                if (cleanAudioUrl && !cleanAudioUrl.startsWith('/') && !cleanAudioUrl.startsWith('http')) {
-                    cleanAudioUrl = '/' + cleanAudioUrl;
-                }
+                // 🚀 【核心修正 3：精準抓取 raw_wer_output.statistics 給雷達圖用】
+                const rawWer = extendedReport.raw_wer_output || {};
+                const stats = rawWer.statistics || {}; 
+                const counts = [
+                    stats.repair_repetition || 0,
+                    stats.repair_attempt || 0,
+                    stats.repair_restart || 0,
+                    stats.substitutions || 0,
+                    stats.deletions || 0,
+                    stats.insertions || 0
+                ];
 
-                if (cleanAudioUrl) {
-                    cleanAudioUrl += (cleanAudioUrl.includes('?') ? '&' : '?') + 't=' + Date.now();
-                }
+                // 子彈圖設定
+                const targetNpvi = 50; 
+                const targetVarco = 45;
+                const actualNpviNum = parseFloat(singleParaNpvi) || 0;
+                const actualVarcoNum = parseFloat(singleParaVarco) || 0;
 
-                const audioSection = document.createElement('div');
-                audioSection.style.background = '#f8fafc';
-                audioSection.style.border = '1px solid #e2e8f0';
-                audioSection.style.padding = '14px 18px';
-                audioSection.style.borderRadius = '10px';
-                audioSection.style.width = '100%';
-                audioSection.style.boxSizing = 'border-box';
+                const chartsHTML = `
+                    <div style="display: flex; gap: 24px; width: 100%; flex-wrap: wrap;">
+                        <!-- 左側：WER 錯誤雷達圖 -->
+                        <div style="flex: 1; min-width: 300px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; align-items: center;">
+                            <div style="font-size: 0.95rem; font-weight: bold; color: #475569; margin-bottom: 12px; align-self: flex-start;">🕸️ 發音錯誤面向分析</div>
+                            <div style="position: relative; width: 100%; height: 220px;">
+                                <canvas class="radar-canvas"></canvas>
+                            </div>
+                        </div>
 
-                audioSection.innerHTML = `
-                    <div style="font-size: 0.9rem; font-weight: bold; color: #475569; margin-bottom: 8px;">
-                        🎵 段落 ${para.paragraph_index} 錄音回放 (WAV)：
+                        <!-- 右側：nPVI / Varco 子彈圖 -->
+                        <div style="flex: 1; min-width: 300px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; justify-content: center; gap: 20px;">
+                            <div style="font-size: 0.95rem; font-weight: bold; color: #475569; margin-bottom: 4px;">🎯 流暢度達標分析 (Bullet Chart)</div>
+                            
+                            <!-- nPVI 子彈圖 -->
+                            <div>
+                                <div style="display: flex; justify-content: space-between; font-size: 0.85rem; font-weight: bold; color: #333; margin-bottom: 6px;">
+                                    <span>nPVI 節奏指數</span>
+                                    <span>實測: <span style="color: #2563eb;">${actualNpviNum}</span> / 標準: ${targetNpvi}</span>
+                                </div>
+                                <div style="position: relative; width: 100%; height: 24px; background: #e2e8f0; border-radius: 12px; overflow: hidden;">
+                                    <div style="width: ${Math.min((actualNpviNum / targetNpvi) * 80, 100)}%; height: 100%; background: #3b82f6; transition: width 1s;"></div>
+                                    <div style="position: absolute; left: 80%; top: 0; bottom: 0; width: 4px; background: #e63946; z-index: 10;" title="目標標準線"></div>
+                                </div>
+                            </div>
+
+                            <!-- Varco 子彈圖 -->
+                            <div>
+                                <div style="display: flex; justify-content: space-between; font-size: 0.85rem; font-weight: bold; color: #333; margin-bottom: 6px;">
+                                    <span>Varco 語速變異</span>
+                                    <span>實測: <span style="color: #10b981;">${actualVarcoNum}</span> / 標準: ${targetVarco}</span>
+                                </div>
+                                <div style="position: relative; width: 100%; height: 24px; background: #e2e8f0; border-radius: 12px; overflow: hidden;">
+                                    <div style="width: ${Math.min((actualVarcoNum / targetVarco) * 80, 100)}%; height: 100%; background: #10b981; transition: width 1s;"></div>
+                                    <div style="position: absolute; left: 80%; top: 0; bottom: 0; width: 4px; background: #e63946; z-index: 10;" title="目標標準線"></div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
-                    <audio src="${cleanAudioUrl}" controls style="width: 100%; max-width: 500px; height: 36px; display: block;" preload="metadata"></audio>
                 `;
 
-                const capsuleSection = document.createElement('div');
-                capsuleSection.style.display = 'flex';
-                capsuleSection.style.flexWrap = 'wrap';
-                capsuleSection.style.gap = '12px';
-                capsuleSection.style.lineHeight = '1.8';
-                capsuleSection.style.width = '100%';
-                capsuleSection.style.boxSizing = 'border-box';
+                // 🎵 區塊 2：音檔播放器
+                let cleanAudioUrl = para.file_path || '';
+                if (cleanAudioUrl && !cleanAudioUrl.startsWith('/') && !cleanAudioUrl.startsWith('http')) cleanAudioUrl = '/' + cleanAudioUrl;
+                if (cleanAudioUrl) cleanAudioUrl += (cleanAudioUrl.includes('?') ? '&' : '?') + 't=' + Date.now();
 
-                let currentParaVisualHTML = '';
+                const audioHTML = `
+                    <div style="background: #f1f5f9; border: 1px solid #cbd5e1; padding: 12px 18px; border-radius: 8px;">
+                        <div style="font-size: 0.9rem; font-weight: bold; color: #475569; margin-bottom: 8px;">🎵 錄音回放 (WAV)：</div>
+                        <audio src="${cleanAudioUrl}" controls style="width: 100%; height: 36px;" preload="metadata"></audio>
+                    </div>
+                `;
 
-                if (para.alignment_report && para.alignment_report.length > 0) {
-                    para.alignment_report.forEach(item => {
-                        let colorStyle = 'color: #4ade80;';
-                        let textDecoration = '';
-                        let bgStyle = 'background-color: #f0fdf4;';
-
-                        const category = item.Category || item.category || 'Match';
-                        const reference = item.Reference || item.reference || '';
-                        const hypothesis = item.Hypothesis || item.hypothesis || '';
-
-                        switch (category) {
-                            case 'Delete': case 'delete':
-                                colorStyle = 'color: #9ca3af;'; bgStyle = 'background-color: #f3f4f6;'; textDecoration = 'text-decoration: line-through;'; break;
-                            case 'Substitute': case 'substitute':
-                                colorStyle = 'color: #dc2626; font-weight: bold;'; bgStyle = 'background-color: #fef2f2;'; break;
-                            case 'Insert': case 'insert':
-                                colorStyle = 'color: #d97706;'; bgStyle = 'background-color: #fffbeb;'; break;
-                            case 'Repair_Repetition': case 'repetition':
-                                colorStyle = 'color: #ea580c;'; bgStyle = 'background-color: #fff7ed;'; textDecoration = 'text-decoration: underline wavy #ea580c; text-underline-offset: 4px;'; break;
-                            case 'Repair_Attempt': case 'attempt':
-                                colorStyle = 'color: #db2777;'; bgStyle = 'background-color: #fdf2f8;'; textDecoration = 'text-decoration: underline dashed #db2777; text-underline-offset: 4px;'; break;
-                            case 'Repair_Restart': case 'restart':
-                                colorStyle = 'color: #7c3aed;'; bgStyle = 'background-color: #f5f3ff;'; textDecoration = 'text-decoration: underline dotted #7c3aed; text-underline-offset: 4px;'; break;
-                        }
-
-                        currentParaVisualHTML += `
-                            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 6px 12px; border-radius: 8px; ${bgStyle} min-width: 65px; box-shadow: 0 1px 3px rgba(0,0,0,0.02);">
-                                <div style="font-size: 1.1rem; font-weight: bold; color: #1f2937; margin-bottom: 4px; text-align: center;">${reference === '—' ? '-' : reference}</div>
-                                <div style="font-size: 0.95rem; ${colorStyle} ${textDecoration} text-align: center; font-weight: 600;">${hypothesis === '—' ? '-' : hypothesis}</div>
+                // 📝 區塊 3：互動式錯誤篩選逐字稿
+                const filterHTML = `
+                    <div style="display: flex; flex-direction: column; gap: 12px;">
+                        <div style="font-size: 0.9rem; font-weight: bold; color: #475569;">🔍 點擊錯誤類別，查看發生在哪個單字：</div>
+                        <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+                            <button class="wer-filter-btn" onclick="window.switchWerFilter(this, 'repair_repetition', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Repetition</button>
+                            <button class="wer-filter-btn" onclick="window.switchWerFilter(this, 'repair_attempt', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Attempt</button>
+                            <button class="wer-filter-btn" onclick="window.switchWerFilter(this, 'repair_restart', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Restart</button>
+                            <button class="wer-filter-btn" onclick="window.switchWerFilter(this, 'substitutions', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Substitutions</button>
+                            <button class="wer-filter-btn" onclick="window.switchWerFilter(this, 'deletions', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Deletions</button>
+                            <button class="wer-filter-btn" onclick="window.switchWerFilter(this, 'insertions', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Insertions</button>
+                        </div>
+                        <div class="transcript-display-area" style="display: flex; gap: 20px; flex-wrap: wrap; margin-top: 8px;">
+                            <div style="flex: 1; text-align: center; color: #94a3b8; font-size: 0.95rem; padding: 20px; background: #f8fafc; border-radius: 8px; border: 1px dashed #cbd5e1;">
+                                請點擊上方的分類按鈕，以顯示逐字稿與標記紅字。
                             </div>
-                        `;
-                    });
-                    capsuleSection.innerHTML = currentParaVisualHTML;
-                } else {
-                    capsuleSection.innerHTML = `<p style="color: #999; margin: 0; font-size: 0.9rem;">此段落無詳細文字對照資料。</p>`;
-                }
+                        </div>
+                    </div>
+                `;
 
-                body.appendChild(audioSection);
-                body.appendChild(capsuleSection);
+                body.innerHTML = chartsHTML + audioHTML + filterHTML;
 
+                // ── 手風琴展開事件 (延遲加載雷達圖) ──
                 header.addEventListener('click', () => {
                     const isHidden = body.style.display === 'none';
                     body.style.display = isHidden ? 'flex' : 'none';
                     header.querySelector('.arrow-icon').style.transform = isHidden ? 'rotate(180deg)' : 'rotate(0deg)';
                     header.style.background = isHidden ? '#f1f5f9' : '#f8fafc';
 
-                    if (isHidden) {
-                        const audEl = body.querySelector('audio');
-                        if (audEl && audEl.readyState === 0) {
-                            audEl.load();
+                    // 如果是展開狀態且尚未繪製過雷達圖
+                    if (isHidden && !body.dataset.chartRendered) {
+                        body.dataset.chartRendered = 'true';
+                        
+                        const canvas = body.querySelector('.radar-canvas');
+                        if (canvas) {
+                            new Chart(canvas.getContext('2d'), {
+                                type: 'radar',
+                                data: {
+                                    labels: ['Repetition', 'Attempt', 'Restart', 'Substitutions', 'Deletions', 'Insertions'],
+                                    datasets: [{
+                                        label: '發生次數',
+                                        data: counts,
+                                        backgroundColor: 'rgba(230, 57, 70, 0.2)',
+                                        borderColor: '#e63946',
+                                        pointBackgroundColor: '#e63946',
+                                        borderWidth: 2
+                                    }]
+                                },
+                                options: {
+                                    responsive: true,
+                                    maintainAspectRatio: false,
+                                    scales: {
+                                        r: {
+                                            beginAtZero: true,
+                                            ticks: { stepSize: 1, backdropColor: 'transparent' },
+                                            pointLabels: { font: { size: 11, weight: 'bold' }, color: '#475569' }
+                                        }
+                                    },
+                                    plugins: { legend: { display: false } }
+                                }
+                            });
                         }
                     }
                 });
@@ -2447,6 +2560,7 @@ function renderMultipleParagraphsReport(paragraphList, globalStats) {
         console.error("❌ 渲染歷史大禮包手風琴失敗:", err);
     }
 }
+
 async function settleAndShowReport() {
     const projectId = state.activeProjectId;
     if (!projectId) {
