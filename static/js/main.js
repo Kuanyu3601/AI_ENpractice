@@ -452,6 +452,7 @@ var _total      = 0;
 var _currentIdx = 0;
 var _recorded   = new Set();
 var _decorating = false;
+var _articleKey = null; // 💡 新增：追蹤目前是「哪一篇/哪一次」，setTotal 靠這個判斷是否真的換了文章
 
 // 全域遮擋狀態（供 renderLyrics 重繪後重新套用）
 window._isMasked = false;
@@ -577,10 +578,22 @@ window.ParagraphUI = (function () {
 
     // 暴露給外部的 API
     return {
-        setTotal: function (n) {
-            _total      = n;
-            _recorded   = new Set();
-            _currentIdx = 0;
+        setTotal: function (n, key) {
+            // 💡 關鍵修正：這個函式原本「每次被呼叫」都會無條件清空 _recorded（已錄音記錄），
+            //    但它其實在每次段落重新渲染（包含錄完一段自動跳下一段、或點擊切換段落）都會被呼叫，
+            //    導致綠色的「已錄音」標記畫出來沒多久就被下一次重繪清空。
+            //    現在改成：只有在「真的換了不同文章/次數」時才重置，同一篇文章內的重繪不會影響已錄音記錄。
+            var isSameArticle = (key !== undefined && key !== null)
+                ? (key === _articleKey)
+                : (n === _total && _total !== 0);
+
+            _total = n;
+            if (key !== undefined) _articleKey = key;
+
+            if (!isSameArticle) {
+                _recorded   = new Set();
+                _currentIdx = 0;
+            }
             buildOverview(); // 現在這裡就能找到了
         },
         markRecorded: function (idx) {
@@ -691,6 +704,7 @@ const state = {
     completedSteps: new Set([0]),
     article: null,
     currentParagraph: 0,
+    practiceMode: 'segment', // 'segment' = 分段練習, 'whole' = 整篇練習
     recordings: [],        // 儲存本次練習的 Blob 暫存
 
     // 錄音工具狀態
@@ -762,6 +776,10 @@ function bindEvents() {
     safeBind('uploadAudioBtn', 'click', uploadAudio);
     safeBind('newSessionBtn', 'click', newSession);
 
+    // 💡 練習模式切換（分段練習 / 整篇練習）
+    safeBind('modeSegmentBtn', 'click', () => setPracticeMode('segment'));
+    safeBind('modeWholeBtn', 'click', () => setPracticeMode('whole'));
+
     // 下拉選單與其他綁定保持你原本的寫法...
     const readingBtn = document.getElementById('readingCountBtn');
     if (readingBtn) {
@@ -794,8 +812,11 @@ function bindEvents() {
 // ══════════════════════════════════════════════════
 function checkFirstTime() {
     const age = localStorage.getItem('userAge');
-    if (!age) {
-        document.getElementById('firstTimeModal').classList.add('active');
+    const modal = document.getElementById('firstTimeModal');
+    // 💡 防禦性修正：加上元素存在檢查，避免這裡出錯連帶讓 DOMContentLoaded
+    //    裡「這行之後」的 bindEvents()、initUserHistory() 等初始化整批失效
+    if (!age && modal) {
+        modal.classList.add('active');
     }
 }
 
@@ -917,6 +938,7 @@ function _onEnterStep1() {
 // ── 進入 Step 2：還原段落錄音視覺狀態 ──────────────
 function _onEnterStep2() {
     if (!state.article) return;
+    _applyPracticeModeUI();
     // 重繪段落（badges / 鎖定狀態）
     renderLyrics();
     // 還原 pip 小圓點
@@ -1081,10 +1103,14 @@ function processFile(file) {
                 title: articleName,
                 article: newArticle,
                 currentStep: 0,
+                completedSteps: [0], // 💡 新文章：只完成「選擇文章」，避免繼承上一篇的完成狀態
+                practiceMode: 'segment', // 💡 新文章預設為分段練習
                 recordings: new Array(paragraphs.length).fill(null),
                 currentParagraph: 0,
                 date: new Date().toLocaleString('zh-TW', { hour12: false }) // 補上日期，排序才不會亂
             };
+            // 💡 立即寫入 localStorage，避免建立後、選擇模式前就重新整理分頁而遺失預設值
+            _savePracticeModeForProject(projectId, 'segment');
 
             // 💡 渲染 UI
             renderPreview(newArticle);
@@ -1108,6 +1134,64 @@ function processFile(file) {
     reader.readAsText(file);
 }
 
+// ══════════════════════════════════════════════════
+//  練習模式切換：分段練習 / 整篇練習
+// ══════════════════════════════════════════════════
+
+/**
+ * 💡 關鍵修正：practiceMode（分段/整篇）目前後端完全沒有對應欄位可以存，
+ *    只存在瀏覽器記憶體的 state.projects 裡；一旦分頁重新整理、initUserHistory()
+ *    重新向後端抓歷史紀錄，這個選擇就會遺失、被迫全部視為預設的「分段練習」。
+ *    這裡改用 localStorage（以 project_id 當 key）額外保存一份，
+ *    這樣即使重新整理分頁，也能正確還原「這次到底是分段還是整篇」。
+ */
+const PRACTICE_MODE_STORAGE_KEY = 'practiceModeByProject';
+
+function _savePracticeModeForProject(projectId, mode) {
+    if (!projectId) return;
+    try {
+        const map = JSON.parse(localStorage.getItem(PRACTICE_MODE_STORAGE_KEY) || '{}');
+        map[projectId] = mode;
+        localStorage.setItem(PRACTICE_MODE_STORAGE_KEY, JSON.stringify(map));
+    } catch (e) {
+        console.warn('儲存練習模式到 localStorage 失敗:', e);
+    }
+}
+
+function _loadPracticeModeForProject(projectId) {
+    if (!projectId) return null;
+    try {
+        const map = JSON.parse(localStorage.getItem(PRACTICE_MODE_STORAGE_KEY) || '{}');
+        return map[projectId] || null;
+    } catch (e) {
+        return null;
+    }
+}
+
+function setPracticeMode(mode) {
+    state.practiceMode = mode;
+
+    const segBtn = document.getElementById('modeSegmentBtn');
+    const wholeBtn = document.getElementById('modeWholeBtn');
+    if (segBtn) segBtn.classList.toggle('active', mode === 'segment');
+    if (wholeBtn) wholeBtn.classList.toggle('active', mode === 'whole');
+
+    // 💡 關鍵修正：同步寫回目前作用中的專案，
+    //    這樣「切換練習次數」時才能正確還原該次選擇的分段/整篇練習模式
+    if (state.activeProjectId && state.projects[state.activeProjectId]) {
+        state.projects[state.activeProjectId].practiceMode = mode;
+        // 💡 同時寫入 localStorage，避免分頁重新整理後遺失這個選擇
+        _savePracticeModeForProject(state.activeProjectId, mode);
+    }
+}
+
+/** 依目前 state.practiceMode，切換 Step2 錄音區塊的顯示樣式（是否顯示左側段落選欄） */
+function _applyPracticeModeUI() {
+    const section = document.getElementById('recordSection');
+    if (!section) return;
+    section.classList.toggle('whole-mode', state.practiceMode === 'whole');
+}
+
 async function startPractice() {
     if (!state.article) {
         showToast('請先上傳 .txt 檔案');
@@ -1118,10 +1202,11 @@ async function startPractice() {
     state.completedSteps.add(1);
     state.currentStep = 1;
     updateStepUI();
+    _applyPracticeModeUI();
 
     if (window.ParagraphUI) {
-        // setTotal 會清空 _recorded，所以接著立刻還原
-        window.ParagraphUI.setTotal(state.article.paragraphs.length);
+        // setTotal 現在只有在真的換了不同次數/文章時才會清空 _recorded，這裡仍保留 restore 以防萬一
+        window.ParagraphUI.setTotal(state.article.paragraphs.length, state.activeProjectId);
         window.ParagraphUI.setCurrentIdx(state.currentParagraph || 0);
         _restoreRecordedBadges();
     }
@@ -1174,8 +1259,8 @@ function splitIntoSentences(text) {
     return parts.map(s => s.trim()).filter(Boolean);
 }
 
-/** Render all paragraph cards in #lyricsView and update the progress label */
-function renderLyrics() {
+/** Render all paragraph cards in #lyricsView and update the progress label (不含錄音鎖定邏輯，可安全被整篇練習換頁呼叫) */
+function renderLyricsCore() {
     if (!state.article || !state.article.paragraphs) {
         console.warn('[renderLyrics] 警告：尚未載入文章資料，取消渲染');
         return;
@@ -1185,6 +1270,7 @@ function renderLyrics() {
     const progress = document.getElementById('paragraphProgress');
     const paras    = state.article.paragraphs || [];
     const cur      = state.currentParagraph || 0;
+    const isWhole  = state.practiceMode === 'whole';
 
     if (progress) {
         progress.textContent = `段落 ${cur + 1} / ${paras.length}`;
@@ -1202,18 +1288,39 @@ function renderLyrics() {
 
         // 💡 核心修改：幫每個句子的 span 加上 onclick 事件，並傳入轉義後的字串
         const sentenceHtml = sentences
-            .map(s => `<span class="lyric-sentence">${s}</span>`)
+            .map(s => `${s}`)
             .map(s => {
                 // 將句子中的單雙引號轉義，避免 HTML 屬性解析出錯
                 const safeSentence = s.replace(/'/g, "\\'").replace(/"/g, '&quot;');
                 return `<span class="lyric-sentence" style="cursor: pointer;" onclick="speakSentence('${safeSentence}')" title="點擊朗讀此句">${s}</span>`;
             })
             .join('');
-        return `<div class="${cls}" data-para-idx="${i}">${sentenceHtml}</div>`;
+
+        // 💡 整篇練習模式：每段右下角提供「下一段」箭頭，非第一段則左下角提供「上一段」箭頭
+        //    （純粹切換顯示，不影響錄音進行中的狀態）
+        let navHtml = '';
+        if (isWhole) {
+            const hasPrev = i > 0;
+            const hasNext = i < paras.length - 1;
+            navHtml += '<div class="lyric-nav-arrows">';
+            if (hasPrev) {
+                navHtml += `<button type="button" class="lyric-nav-arrow lyric-nav-prev" title="上一段" onclick="event.stopPropagation(); switchWholeParagraphView(${i - 1});">&#8592;</button>`;
+            } else {
+                navHtml += `<span class="lyric-nav-arrow lyric-nav-placeholder"></span>`;
+            }
+            if (hasNext) {
+                navHtml += `<button type="button" class="lyric-nav-arrow lyric-nav-next" title="下一段" onclick="event.stopPropagation(); switchWholeParagraphView(${i + 1});">&#8594;</button>`;
+            } else {
+                navHtml += `<span class="lyric-nav-arrow lyric-nav-placeholder"></span>`;
+            }
+            navHtml += '</div>';
+        }
+
+        return `<div class="${cls}" data-para-idx="${i}">${sentenceHtml}${navHtml}</div>`;
     }).join('');
 
     if (window.ParagraphUI) {
-        ParagraphUI.setTotal(paras.length);
+        ParagraphUI.setTotal(paras.length, state.activeProjectId);
         ParagraphUI.setCurrentIdx(cur);
     }
 
@@ -1221,6 +1328,20 @@ function renderLyrics() {
     if (curEl) {
         curEl.scrollIntoView({ block: 'center', behavior: 'smooth' });
     }
+
+    if (window._isMasked) {
+        const targetIdx = (typeof state.currentParagraph === 'number') ? state.currentParagraph : 0;
+        _updateMaskSlots(targetIdx);
+    }
+}
+
+/** Render all paragraph cards in #lyricsView + 更新錄音按鈕鎖定狀態（僅分段練習模式需要） */
+function renderLyrics() {
+    renderLyricsCore();
+    if (!state.article || !state.article.paragraphs) return;
+
+    // 💡 整篇練習模式只有「一整段」錄音，不依段落鎖定錄音按鈕
+    if (state.practiceMode === 'whole') return;
 
     const recordBtn = document.getElementById('recordBtn');
     const currentProj = state.projects[state.activeProjectId];
@@ -1241,12 +1362,17 @@ function renderLyrics() {
             recordBtn.style.opacity = '1';
         }
     }
+}
 
-    if (window._isMasked) {
-        const targetIdx = (typeof state.currentParagraph === 'number') ? state.currentParagraph : 0;
-        _updateMaskSlots(targetIdx);
-    }
-
+/**
+ * 💡 整篇練習模式專用：僅切換段落文字/圖片提示的顯示，完全不影響錄音狀態
+ * （不呼叫 resetRecordUI，不查詢/載入該段落的既有音檔，錄音中可直接切換不中斷）
+ */
+function switchWholeParagraphView(idx) {
+    if (!state.article || !state.article.paragraphs) return;
+    if (idx < 0 || idx >= state.article.paragraphs.length) return;
+    state.currentParagraph = idx;
+    renderLyricsCore();
 }
 
 /** Reset all recording UI back to the idle state */
@@ -1527,7 +1653,9 @@ async function uploadAudio() {
                 showToast(`段落 ${currentPara} 儲存成功 (分析未完成)`);
             }
 
-            const isLast = state.currentParagraph >= (state.article.paragraphs.length - 1);
+            const isLast = (state.practiceMode === 'whole')
+                ? true
+                : state.currentParagraph >= (state.article.paragraphs.length - 1);
             if (isLast) {
                 showToast('全部錄音完成！快來看看 AI 流暢度分析報告吧 🎉');
                 if (typeof settleAndShowReport === 'function') {
@@ -1641,7 +1769,9 @@ function newSession() {
     state.currentParagraph = 0;
     state.completedSteps   = new Set([0]);
     state.recordings       = [];
+    setPracticeMode('segment');
     resetRecordUI();
+    _resetScorePanel();
     document.getElementById('chatTitle').textContent = '選擇文章開始練習';
     document.getElementById('startBtn').disabled = true;
     document.getElementById('selectedPreview').classList.remove('visible');
@@ -1731,17 +1861,27 @@ async function uploadAndContinue() {
     }
 }
 // 💡 切換選單顯示/隱藏
-document.getElementById('addProjectBtn').onclick = (e) => {
-    e.stopPropagation();
-    const menu = document.getElementById('plusMenu');
-    // 檢查是否有當前文章，決定「複習」按鈕是否可用
-    const retryBtn = document.getElementById('retryCurrentBtn');
-    retryBtn.style.display = state.article ? 'block' : 'none';
-    menu.classList.toggle('show');
-};
+// 💡 防禦性修正：加上元素存在檢查。原本這裡沒判斷 null 就直接 .onclick=，
+//    若頁面上真的沒有 id="addProjectBtn" 這個元素（目前這份 main.html 就沒有），
+//    會直接丟出例外，導致這行「之後」的所有頂層程式碼（不含函式宣告本身）完全不會執行。
+(function () {
+    const btn = document.getElementById('addProjectBtn');
+    if (!btn) return;
+    btn.onclick = (e) => {
+        e.stopPropagation();
+        const menu = document.getElementById('plusMenu');
+        // 檢查是否有當前文章，決定「複習」按鈕是否可用
+        const retryBtn = document.getElementById('retryCurrentBtn');
+        if (retryBtn) retryBtn.style.display = state.article ? 'block' : 'none';
+        if (menu) menu.classList.toggle('show');
+    };
+})();
 
 // 點擊外面關閉選單
-window.onclick = () => document.getElementById('plusMenu').classList.remove('show');
+window.onclick = () => {
+    const menu = document.getElementById('plusMenu');
+    if (menu) menu.classList.remove('show');
+};
 
 async function createNewProject(type) {
     const projectId = 'proj_' + Date.now();
@@ -1781,14 +1921,20 @@ async function createNewProject(type) {
     }
 
     // 建立新專案資料結構
+    const initialPracticeMode = (type === 'retry') ? state.practiceMode : 'segment';
     state.projects[projectId] = {
         id: projectId,
         title: newTitle,
         article: newArticle,
         currentStep: 0,
+        completedSteps: [0], // 💡 新專案：只完成「選擇文章」，避免繼承上一篇的完成狀態
+        // 💡 重錄同一篇文章時延續原本的練習模式；全新專案則預設分段練習
+        practiceMode: initialPracticeMode,
         recordings: [],
         date: new Date().toLocaleString('zh-TW', { hour12: false })
     };
+    // 💡 立即寫入 localStorage，避免建立後、選擇模式前就重新整理分頁而遺失這個設定
+    _savePracticeModeForProject(projectId, initialPracticeMode);
 
     // 執行專案切換
     await switchProject(projectId);
@@ -1819,6 +1965,13 @@ async function switchProject(projectId) {
         curP.currentStep = state.currentStep;
         // 💡 新增：將當前的錄音陣列同步回專案物件中
         curP.recordings = [...state.recordings];
+        // 💡 關鍵修正：completedSteps 是每個專案各自的進度，切走前先存回舊專案，
+        //    避免下一個專案誤繼承「評分結果已完成」的綠勾勾與舊報告
+        curP.completedSteps = Array.from(state.completedSteps);
+        // 💡 關鍵修正：練習模式（分段/整篇）也是每個專案各自的設定，切走前先存回舊專案
+        curP.practiceMode = state.practiceMode;
+        // 💡 保險起見同步寫入 localStorage（正常情況下 setPracticeMode 已經寫過一次了）
+        _savePracticeModeForProject(state.activeProjectId, state.practiceMode);
     }
 
     // B. 切換資料核心
@@ -1826,8 +1979,19 @@ async function switchProject(projectId) {
     state.article = nextP.article;
     state.currentParagraph = nextP.currentParagraph || 0;
     state.currentStep = nextP.currentStep || 0;
+    // 💡 還原「這個專案」自己的完成度，而不是沿用上一個專案的全域狀態
+    state.completedSteps = new Set(nextP.completedSteps || [0]);
+    // 💡 關鍵修正：還原「這個專案」自己的練習模式（分段/整篇），而不是沿用目前畫面上的模式
+    setPracticeMode(nextP.practiceMode || 'segment');
+    _applyPracticeModeUI();
     // 💡 關鍵：載入目標專案的錄音，這樣右上角才抓得到資料
     state.recordings = nextP.recordings || [];
+
+    // 💡 若這個專案尚未完成評分（沒有 completedSteps 包含 2），
+    //    清空 Step3 評分結果面板，避免殘留上一篇文章的舊分析結果
+    if (!state.completedSteps.has(2)) {
+        _resetScorePanel();
+    }
 
     // C. 強制重置錄音 UI
     if (typeof resetRecordUI === 'function') resetRecordUI();
@@ -1855,10 +2019,18 @@ async function switchProject(projectId) {
             const lyricsView = document.getElementById('lyricsView');
             if (lyricsView) lyricsView.innerHTML = '';
         }
+        else if (state.currentStep === 2) {
+            // 💡 關鍵修正：評分結果頁要重新向後端抓「這個專案」自己的報告資料，
+            //    不能只切換畫面卻沿用上一個專案殘留在 DOM 裡的舊報告
+            document.getElementById('chatTitle').textContent = `📄 ${state.article.title}`;
+            await _loadAndRenderProjectReport(projectId);
+        }
         else {
             document.getElementById('chatTitle').textContent = `📄 ${state.article.title}`;
             renderLyrics();
             await goToParagraph(state.currentParagraph);
+            // 💡 順手補上：直接切到這個錄音中的次數時，立即正確還原已錄音的綠色標記
+            _restoreRecordedBadges();
         }
     }
     else {
@@ -1908,6 +2080,8 @@ async function initUserHistory() {
                 const recRes = await fetch(`/get_recorded_indices?project_id=${tempId}`);
                 const recData = await recRes.json();
 
+                const hasAnyRecording = (recData.indices || []).length > 0;
+
                 state.projects[tempId] = {
                     id: tempId,
                     title: p.title, // 💡 這裡要確保有存到
@@ -1917,6 +2091,13 @@ async function initUserHistory() {
                         paragraphs: p.content ? p.content.split(/\n\s*\n/).map(s => s.trim()) : []
                     },
                     recordedSet: new Set(recData.indices || []),
+                    // 💡 依實際錄音狀況還原完成度，而非借用其他專案的全域狀態；
+                    //    是否「評分結果」已完成需另外判斷，這裡先不預設為完成，避免顯示尚未產生的舊報告
+                    completedSteps: hasAnyRecording ? [0, 1] : [0],
+                    // 💡 關鍵修正：後端沒有存 practiceMode 欄位，過去在這裡永遠寫死 'segment'，
+                    //    導致分頁重新整理後，任何一次曾選過「整篇練習」的紀錄都會被強制打回「分段練習」。
+                    //    現在改成優先從 localStorage 讀回這個 project 當初實際選過的模式，讀不到才用預設值。
+                    practiceMode: _loadPracticeModeForProject(tempId) || 'segment',
                     currentStep: 1,
                     currentParagraph: 0
                 };
@@ -2098,53 +2279,11 @@ function initWaveform() {
     });
 }
 
-// 💡 修改錄音停止後的處理 (在 startRecording 裡的 mediaRecorder.onstop)
-// 找到這段並加入 wavesurfer 載入邏輯
-state.mediaRecorder.onstop = async () => {
-    stream.getTracks().forEach(t => t.stop());
-    const blob = new Blob(state.audioChunks, { type: state.mediaRecorder.mimeType });
-    state.recordingBlob = blob;
-    const url = URL.createObjectURL(blob);
-
-    // 載入波形
-    if (!wavesurfer) initWaveform();
-    wavesurfer.load(url);
-
-    // 預設建立一個涵蓋前 10 秒到 20 秒的區域 (或是總長的 20%-80%)
-    wavesurfer.on('ready', () => {
-        wsRegions.clearRegions();
-        wsRegions.addRegion({
-            start: 10,
-            end: 20,
-            color: 'rgba(52, 152, 219, 0.3)',
-            drag: true,
-            resize: true
-        });
-    });
-
-    document.getElementById('playbackRow').classList.add('visible');
-    document.getElementById('uploadAudioBtn').classList.add('visible');
-};
-
-// 💡 點擊加號打開或關閉選單
-document.getElementById('addProjectBtn').addEventListener('click', function(e) {
-    e.stopPropagation(); // 防止事件向上傳播，避免觸發 window.onclick
-    const menu = document.getElementById('plusMenu');
-
-    // 檢查目前有沒有文章，決定是否顯示「複習」按鈕
-    const retryBtn = document.getElementById('retryCurrentBtn');
-    if (retryBtn) {
-        retryBtn.style.display = (state && state.article) ? 'block' : 'none';
-    }
-
-    menu.classList.toggle('show');
-});
-
-// 💡 點擊頁面任何其他地方就關閉選單
-window.addEventListener('click', function() {
-    const menu = document.getElementById('forgotModal'); // 如果你有其他 modal 也要注意
-    document.getElementById('plusMenu').classList.remove('show');
-});
+// 💡 以下這整段（原本的頂層 state.mediaRecorder.onstop / 重複的 addProjectBtn 綁定 /
+//    重複的 window click 監聽）是舊版遺留、與現有 startRecordingSegment() 邏輯重複且
+//    參照了不存在的 stream 變數的失效程式碼，會在頁面上沒有 addProjectBtn 元素時直接
+//    拋出例外、讓「這行之後」的所有頂層程式碼整個停擺。上面已經用防禦性寫法重新綁定過
+//    一次同樣的功能，這裡整段移除，不影響任何現有功能。
 
 // ── TTS 朗讀功能 ──
 function initTTS() {
@@ -2165,14 +2304,17 @@ function initTTS() {
             return;
         }
 
-        // 讀取當前段落文字（取純文字，排除 badge 等子元素）
+        // 讀取當前段落文字（優先取 .lyric-sentence，避免整篇練習模式的換頁箭頭符號被誤讀）
         const curEl = document.querySelector('#lyricsView .lyric-current');
         if (!curEl) return;
 
-        const text = Array.from(curEl.childNodes)
-            .filter(n => n.nodeType === Node.TEXT_NODE)
-            .map(n => n.textContent.trim())
-            .join(' ')
+        const sentenceEls = curEl.querySelectorAll('.lyric-sentence');
+        const text = (sentenceEls.length
+                ? Array.from(sentenceEls).map(el => el.textContent.trim()).join(' ')
+                : Array.from(curEl.childNodes)
+                    .filter(n => n.nodeType === Node.TEXT_NODE)
+                    .map(n => n.textContent.trim())
+                    .join(' '))
             || curEl.innerText.trim();
 
         if (!text) return;
@@ -2315,7 +2457,9 @@ function initMaskBtn() {
                 maskArea.style.setProperty('flex', '1', 'important');
                 maskArea.style.setProperty('width', '100%', 'important');
                 maskArea.style.setProperty('height', '100%', 'important');
-                maskArea.style.setProperty('min-height', '260px', 'important');
+                // 💡 修正：拿掉寫死的 min-height: 260px，改讓它跟著 .lyrics-wrapper 現在的動態高度（clamp 縮放後）走，
+                //    不然視窗縮小、字幕區跟著變矮時，這個圖片區還是會被撐開到至少 260px，跟外面對不齊。
+                maskArea.style.removeProperty('min-height');
             }
 
             // 💡 終極修正 3：防禦索引，確保絕對不為 undefined 或 NaN
@@ -2852,6 +2996,57 @@ function renderMultipleParagraphsReport(paragraphList, globalStats) {
     }
 }
 
+/**
+ * 💡 清空 Step3 評分結果面板為初始佔位狀態。
+ * 用於切換到「尚未完成評分」的專案時，避免殘留上一篇文章的舊報告。
+ */
+function _resetScorePanel() {
+    const scoreText    = document.getElementById('werScoreText');
+    const errorCountEl = document.getElementById('werErrorCount');
+    const totalWords   = document.getElementById('werTotalWords');
+    const avgNpvi      = document.getElementById('werAvgNpvi');
+    const avgVarco     = document.getElementById('werAvgVarco');
+
+    if (scoreText)    scoreText.textContent    = '0.0%';
+    if (errorCountEl) errorCountEl.textContent = '0';
+    if (totalWords)   totalWords.textContent   = '0';
+    if (avgNpvi)       avgNpvi.textContent      = '0.00';
+    if (avgVarco)       avgVarco.textContent     = '0.00';
+
+    const container = document.getElementById('werParagraphsContainer');
+    if (container) {
+        container.innerHTML = `
+            <div style="background: #fff; border: 1px solid #e2e8f0; padding: 40px; border-radius: 12px; text-align: center; width: 100%; box-sizing: border-box;">
+                <p style="color: #999; margin: 0; font-size: 0.95rem;">暫無分析資料，請先錄音並點擊結算。 🎉</p>
+            </div>
+        `;
+    }
+}
+
+/**
+ * 💡 依 projectId 向後端抓取「該次練習」自己的評分報告並渲染到 Step3 面板。
+ * 供切換練習次數（右上角下拉選單）/ 側欄歷史紀錄時，正確顯示「那一次」的評分結果。
+ */
+async function _loadAndRenderProjectReport(projectId) {
+    if (!projectId) return;
+    try {
+        const response = await fetch(`/get_project_total_report?project_id=${projectId}`);
+        if (!response.ok) throw new Error("後端資料彙整失敗");
+
+        const resData = await response.json();
+        if (resData.status === 'success') {
+            renderMultipleParagraphsReport(resData.paragraph_list, resData.global_stats);
+        } else {
+            showToast("彙整失敗: " + (resData.message || '未知錯誤'));
+            _resetScorePanel();
+        }
+    } catch (err) {
+        console.error("載入評分報告失敗:", err);
+        showToast("伺服器連線失敗，無法載入報告");
+        _resetScorePanel();
+    }
+}
+
 async function settleAndShowReport() {
     const projectId = state.activeProjectId;
     if (!projectId) {
@@ -2861,28 +3056,12 @@ async function settleAndShowReport() {
 
     showToast("正在從資料庫彙整各段落數據...");
 
-    try {
-        // 向你的 Flask 新開一條路由取得目前 project_id 的全段落大禮包
-        const response = await fetch(`/get_project_total_report?project_id=${projectId}`);
-        if (!response.ok) throw new Error("後端資料彙整失敗");
+    // 切換前端 UI 到 Step 3 評分結果分頁
+    state.completedSteps.add(2);
+    state.currentStep = 2;
+    updateStepUI();
 
-        const resData = await response.json();
-
-        if (resData.status === 'success') {
-            // 切換前端 UI 到 Step 3 評分結果分頁
-            state.completedSteps.add(2);
-            state.currentStep = 2;
-            updateStepUI();
-
-            // 💡 呼叫手風琴渲染函數，帶入後端 MySQL 資料庫抓出來的資料！
-            renderMultipleParagraphsReport(resData.paragraph_list, resData.global_stats);
-        } else {
-            showToast("彙整失敗: " + resData.message);
-        }
-    } catch (err) {
-        console.error("提早看報告發生錯誤:", err);
-        showToast("伺服器連線失敗，無法載入報告");
-    }
+    await _loadAndRenderProjectReport(projectId);
 }
 
 // 💡 核心函數：當點擊側邊欄的練習紀錄時觸發

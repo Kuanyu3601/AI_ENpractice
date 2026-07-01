@@ -29,6 +29,6 @@ services:
       - TZ=Asia/Taipei
     # 💡 既然它已經是常駐網站了，原本為了強行喚醒而掛載的 /var/run/docker.sock 與 shared-data 都可以拔掉了，保持乾淨！
     volumes:
-      - D:\AI_ENpractice\kids_recordings:/app/data
+      - ${RECORDINGS_PATH:-./kids_recordings}:/app/data:rw
 volumes:
   shared-data:

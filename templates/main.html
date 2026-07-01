@@ -188,6 +188,15 @@
                         <div class="preview-body" id="previewContent"></div>
                     </div>
 
+                    <div class="practice-mode-row" id="practiceModeRow">
+                        <button type="button" class="mode-btn active" id="modeSegmentBtn" data-mode="segment">
+                            分段練習
+                        </button>
+                        <button type="button" class="mode-btn" id="modeWholeBtn" data-mode="whole">
+                            整篇練習
+                        </button>
+                    </div>
+
                     <button class="primary-btn start-btn" id="startBtn" disabled>
                         開始練習 →
                     </button>
@@ -196,8 +205,8 @@
 
             <!-- ── Step 2: Recording ── -->
             <div class="step-panel" id="panel-1">
-                <div class="record-section">
-                    <div class="para-sidebar" >
+                <div class="record-section" id="recordSection">
+                    <div class="para-sidebar" id="paraSidebar">
                         <div class="paragraph-progress" id="paragraphProgress">段落 1 / 4</div>
 
                         <div class="para-overview-strip" id="paraOverviewStrip"></div>
@@ -268,7 +277,7 @@
                                     </button>
 
                                     <button class="secondary-btn" id="skipToResultBtn" onclick="settleAndShowReport()" style="flex: 1; background: #f5f3ff; color: #7c3aed; border: 1.5px solid #ddd6fe; padding: 12px 18px; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 0.95rem; display: flex; align-items: center; justify-content: center; gap: 6px;">
-                                        📊 提早看報告
+                                        查看報告
                                     </button>
                                 </div>
                             </div>

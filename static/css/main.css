@@ -903,6 +903,40 @@ body, html {
     width: 100%;
 }
 
+/* ── 練習模式選擇（分段 / 整篇） ── */
+.practice-mode-row {
+    display: flex;
+    gap: 12px;
+    margin-top: 24px;
+}
+
+.mode-btn {
+    flex: 1;
+    padding: 12px 10px;
+    border-radius: 10px;
+    border: 1.5px solid rgba(85,133,181,0.3);
+    background: #f2f7ff;
+    color: #4a7cbf;
+    font-weight: 700;
+    font-size: 0.92rem;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.mode-btn:hover:not(.active) {
+    background: linear-gradient(135deg, #deeeff, #c8e4ff);
+    border-color: #4a9de0;
+    color: #1d5fa8;
+    transform: translateY(-1px);
+}
+
+.mode-btn.active {
+    background: linear-gradient(135deg, #4a9de0, #2c73c0);
+    border-color: #2c73c0;
+    color: #fff;
+    box-shadow: 0 3px 10px rgba(44,115,192,0.3);
+}
+
 
 /* ══════════════════════════════════════════════════
    STEP 2 — RECORDING
@@ -919,8 +953,62 @@ body, html {
 }
 
 
-/* ── 左側段落選擇欄 ── */
-.para-sidebar {
+/* ── 整篇練習模式：不顯示左側段落選擇欄 ── */
+.record-section.whole-mode .para-sidebar {
+    display: none;
+}
+.record-section.whole-mode .record-content {
+    padding-left: 20px;
+}
+
+/* ── 段落換頁箭頭（僅整篇練習模式使用） ── */
+.lyric-nav-arrows {
+    position: absolute;
+    left: 16px;
+    right: 16px;
+    bottom: 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    pointer-events: none;
+}
+
+.lyric-nav-arrow {
+    pointer-events: auto;
+    width: 34px;
+    height: 34px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    border: 1.5px solid rgba(44,115,192,0.35);
+    background: #fff;
+    color: #2c73c0;
+    font-size: 1.05rem;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(44,115,192,0.18);
+    transition: all 0.2s;
+}
+
+.lyric-nav-arrow:hover {
+    background: linear-gradient(135deg, #4a9de0, #2c73c0);
+    border-color: #2c73c0;
+    color: #fff;
+    transform: scale(1.08);
+}
+
+.lyric-nav-placeholder {
+    width: 34px;
+    height: 34px;
+    visibility: hidden;
+}
+
+/* 整篇練習模式下，目前段落卡片保留底部空間給換頁箭頭 */
+.record-section.whole-mode .lyric-current {
+    padding-bottom: 56px !important;
+}
     width: 100px;
     flex-shrink: 0;  /* 不壓縮 */
     flex-grow: 0; 
@@ -940,6 +1028,7 @@ body, html {
 
     flex: 1;
     min-width: 0;
+    min-height: 0;   /* 💡 修正：避免內部固定高度的子元素撐爆外層，導致無法正確依視窗縮放 */
     display: flex;
     flex-direction: column;
 
@@ -950,10 +1039,13 @@ body, html {
 }
 
 .record-main {
+    display: flex;              /* 💡 修正：原本不是 flex 容器，字幕區/錄音區無法依可用空間動態分配 */
+    flex-direction: column;
     flex: 1;
     width: 100%;
-    max-width: 900px;
+    max-width: min(900px, 94%); /* 💡 寬度也隨視窗寬度微調，而非只有單一固定值 */
     margin: 0 auto;
+    min-height: 0;               /* 💡 避免內部固定高度撐爆外層、導致無法正確縮放 */
     transition: max-width 0.28s ease;
 }
  
@@ -1028,8 +1120,9 @@ body, html {
     display: flex;
     flex-direction: row;
     gap: 10px;
-    flex: 0 0 auto;
-    height: 300px;
+    flex: 1 1 auto;                       /* 💡 修正：原本是 0 0 auto（不可伸縮），改成可以跟著可用空間伸縮 */
+    height: clamp(200px, 34vh, 340px);    /* 💡 修正：原本鎖死 300px，現在依視窗高度縮放（有上下限避免過小/過大） */
+    min-height: 180px;
 }
 
 /* 按鈕垂直群組 */
@@ -1159,6 +1252,7 @@ body, html {
 
 /* ── Lyric paragraph base ── */
 .lyric-para {
+    position: relative;
     scroll-snap-align: center;
     display: flex;
     flex-direction: column;
@@ -1301,16 +1395,16 @@ body, html {
 
 /* Record Controls */
 .record-controls {
-    flex-shrink: 0;     /* ← 不壓縮，完整顯示 */
+    flex-shrink: 1;     /* 💡 修正：允許在空間不足時收縮，而不是被固定死 */
     overflow-y: auto;
-    max-height: 250px;
+    max-height: clamp(190px, 28vh, 280px); /* 💡 修正：原本鎖死 250px，現在依視窗高度縮放 */
     padding-top: 18px;
     border-top: 1px solid rgba(60,120,200,0.09);
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 14px;
-    flex: 1 ;
+    flex: 0 1 auto;   /* 💡 修正：不主動搶字幕區的空間，但需要時可以收縮 */
 
 
 }
@@ -1775,6 +1869,21 @@ body, html {
     .step-label { display: none; }
     .step-line { max-width: 40px; }}
 
+/* 💡 新增：視窗高度較小時（例如筆電、或手動縮小瀏覽器高度），
+   讓字幕區與錄音控制區的縮放上下限也一併收緊，避免內容被截斷或出現不必要的內部捲軸 */
+@media (max-height: 700px) {
+    .lyrics-wrapper {
+        height: clamp(160px, 30vh, 260px);
+        min-height: 140px;
+    }
+    .record-controls {
+        max-height: clamp(150px, 24vh, 220px);
+    }
+    .chat-header { height: 50px; }
+    .step-nav { padding: 10px 20px; }
+    .step-panel { padding-top: 18px; padding-bottom: 18px; }
+}
+
 .lyric-sentence { display: block; line-height: 1.7; }
 
 #panel-2.step-panel.active {
@@ -1827,10 +1936,10 @@ body, html {
     gap: 16px !important;
     padding: 16px 20px !important;
 
-    /* 填滿父層 .lyrics-wrapper 的 300px 物理空間 */
+    /* 填滿父層 .lyrics-wrapper 目前的動態高度（clamp 縮放後的高度） */
     width: 100% !important;
     height: 100% !important;
-    min-height: 260px !important;
+    min-height: 0 !important;
     box-sizing: border-box !important;
 }
 
@@ -1839,8 +1948,8 @@ body, html {
     flex: 1 1 0% !important;        /* 強制平分寬度，不允許縮小到 0 */
     width: 100% !important;
     height: 100% !important;
-    max-width: 300px !important;     /* 限制最大寬度防止在大螢幕變形 */
-    max-height: 300px !important;    /* 配合 300px 的 wrapper 高度，確保不溢出 */
+    max-width: 320px !important;     /* 限制最大寬度防止在大螢幕變形 */
+    max-height: 100% !important;     /* 💡 修正：改為跟隨父層動態高度，而非寫死 300px */
     aspect-ratio: 1 / 1 !important;  /* 鎖定正方形 */
 
     border-radius: 5px;
