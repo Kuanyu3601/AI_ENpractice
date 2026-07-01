@@ -148,12 +148,13 @@ def login():
 @app.route('/upload_audio', methods=['POST'])
 def upload_audio():
     project_id = request.form.get('project_id')
+    mode = request.form.get('mode', 'segment')
     para_idx = request.form.get('paragraph_index')
 
     try:
         para_idx = int(para_idx)
     except:
-        return jsonify({"status": "error", "message": f"前端傳來的段落編號錯誤: {para_idx}"})
+        return jsonify({"status": "error", "message": "段落編號錯誤"})
 
     audio_file = request.files.get('audio_data')
     if not audio_file:
@@ -164,6 +165,13 @@ def upload_audio():
         return jsonify({"status": "error", "message": "後端連不上 MySQL 資料庫，請檢查 VPN 或資料庫設定"})
 
     cursor = conn.cursor()
+
+    if mode == 'whole':
+        filename = f"{project_id}_full.wav"
+        para_idx = 0 # 💡 資料庫存 0
+    else:
+        filename = f"{project_id}_para{para_idx}.wav"
+        save_para_idx = para_idx # 存實際段落
 
     try:
         cursor.execute("SELECT username, article_name, article_content FROM projects WHERE project_id = %s", (project_id,))
@@ -191,11 +199,16 @@ def upload_audio():
 
         paragraphs_arr = [p.strip() for p in article_content.split('\n\n') if p.strip()]
 
-        try:
-            original_text = paragraphs_arr[para_idx - 1]
-        except IndexError:
-            original_text = "What has fins sharp teeth and swims in the ocean a shark"
-
+        # 判斷是否為整篇模式
+        if mode == 'whole':
+            # 如果是整篇，把所有段落合併成一個完整的長文本，並移除中間的換行
+            original_text = " ".join(paragraphs_arr)
+        else:
+            # 如果是分段，維持原本的邏輯
+            try:
+                original_text = paragraphs_arr[para_idx - 1]
+            except IndexError:
+                original_text = "What has fins sharp teeth and swims in the ocean a shark"
         # --- 初始化所有目標數據緩衝區 ---
         wer_stats = {"wer_repair_fluency": 0.0, "total_ref_words": len(original_text.split())}
         alignment_report = []

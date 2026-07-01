@@ -213,17 +213,74 @@ function renderWerReportToPanel3(alignmentReport, stats, currentParaNum = 1, bac
 }
 
 // ==================== 3. 歷史大禮包總成 ====================
-function renderMultipleParagraphsReport(paragraphList, globalStats) {
+function renderMultipleParagraphsReport(paragraphList, globalStats, mode = 'segment') {
     try {
-        if (document.getElementById('werScoreText')) document.getElementById('werScoreText').innerText = globalStats ? (globalStats.wer_average * 100).toFixed(1) + '%' : '0.0%';
-        if (document.getElementById('werTotalWords')) document.getElementById('werTotalWords').innerText = globalStats ? globalStats.total_words : '0';
-        if (document.getElementById('werErrorCount')) document.getElementById('werErrorCount').innerText = globalStats ? globalStats.total_errors : '0';
-        if (document.getElementById('werAvgNpvi')) document.getElementById('werAvgNpvi').innerText = (globalStats && globalStats.average_npvi != null) ? parseFloat(globalStats.average_npvi).toFixed(2) : '0.00';
-        if (document.getElementById('werAvgVarco')) document.getElementById('werAvgVarco').innerText = (globalStats && globalStats.average_varco != null) ? parseFloat(globalStats.average_varco).toFixed(2) : '0.00';
+        const isWhole = mode === 'whole';
+
+        // 💡 whole 模式：只有 paragraph_index = 0 是真正的整篇錄音，
+        //    其他段落條目只是分段練習殘留的佔位資料，直接忽略、不參與平均。
+        let effectiveList = paragraphList;
+        let effectiveGlobalStats = globalStats;
+
+        if (isWhole) {
+            const wholeEntry = (paragraphList || []).find(
+                p => p.paragraph_index === 0 && p.file_path !== null && p.wer !== null
+            );
+
+            effectiveList = wholeEntry ? [wholeEntry] : [];
+
+            // 💡 整篇模式已經是「單一完整結果」，不用再平均，直接拿它自己的數值當總體看板
+            effectiveGlobalStats = wholeEntry ? {
+                wer_average: wholeEntry.wer,
+                total_words: wholeEntry.total_ref_words ?? (globalStats ? globalStats.total_words : 0),
+                total_errors: wholeEntry.error_count,
+                average_npvi: wholeEntry.npvi,
+                average_varco: wholeEntry.varco
+            } : null;
+        }
+
+        if (document.getElementById('werScoreText')) {
+            document.getElementById('werScoreText').innerText =
+                effectiveGlobalStats ? (effectiveGlobalStats.wer_average * 100).toFixed(1) + '%' : '0.0%';
+        }
+        if (document.getElementById('werTotalWords')) {
+            document.getElementById('werTotalWords').innerText =
+                effectiveGlobalStats ? effectiveGlobalStats.total_words : '0';
+        }
+        if (document.getElementById('werErrorCount')) {
+            document.getElementById('werErrorCount').innerText =
+                effectiveGlobalStats ? effectiveGlobalStats.total_errors : '0';
+        }
+        if (document.getElementById('werAvgNpvi')) {
+            document.getElementById('werAvgNpvi').innerText =
+                (effectiveGlobalStats && effectiveGlobalStats.average_npvi != null)
+                    ? parseFloat(effectiveGlobalStats.average_npvi).toFixed(2) : '0.00';
+        }
+        if (document.getElementById('werAvgVarco')) {
+            document.getElementById('werAvgVarco').innerText =
+                (effectiveGlobalStats && effectiveGlobalStats.average_varco != null)
+                    ? parseFloat(effectiveGlobalStats.average_varco).toFixed(2) : '0.00';
+        }
+
+        // 💡 順手把標題文字也改一下，whole 模式不叫「Total 平均」
+        const bannerTitle = document.getElementById('scoreBannerTitle');
+        if (bannerTitle) {
+            bannerTitle.innerHTML = isWhole
+                ? '📊 整篇朗讀流暢度結算看板'
+                : '📊 總體朗讀流暢度結算看板 (Total 平均)';
+        }
 
         const container = document.getElementById('werParagraphsContainer');
         if (!container) return;
         container.innerHTML = '';
+
+        if (isWhole && effectiveList.length === 0) {
+            container.innerHTML = `
+                <div style="background: #fff; border: 1px solid #e2e8f0; padding: 40px; border-radius: 12px; text-align: center; width: 100%; box-sizing: border-box;">
+                    <p style="color: #999; margin: 0; font-size: 0.95rem;">暫無整篇錄音分析資料。</p>
+                </div>`;
+            return;
+        }
 
         paragraphList.forEach((para) => {
             const hasRecorded = para.file_path !== null && para.wer !== null;
@@ -1612,7 +1669,8 @@ async function uploadAudio() {
         const profile = JSON.parse(localStorage.getItem('userProfile') || '{}');
         let username = profile.username || document.getElementById('profileUsername')?.value || "guest";
         const articleName = state.article ? state.article.title : "unknown";
-        const currentPara = state.currentParagraph + 1;
+        const mode = _loadPracticeModeForProject(projectId) || 'segment';
+        const currentPara = (mode === 'whole') ? 0 : (state.currentParagraph + 1);
 
         // --- 📥 動作 A：維持你原本的送出存檔 (只傳給你的 5000 後端，8000 port 交給後端打電話就行！) ---
         const formDataMyBackend = new FormData();
@@ -1621,6 +1679,8 @@ async function uploadAudio() {
         formDataMyBackend.append("username", username);
         formDataMyBackend.append("article_name", articleName);
         formDataMyBackend.append("paragraph_index", currentPara);
+        formDataMyBackend.append("mode", mode);
+        console.log(`正在上傳... 模式: ${mode}, 段落索引: ${currentPara}`);
 
         console.log("正在送出音檔至 Flask 後端處理...");
         const response = await fetch('/upload_audio', { method: 'POST', body: formDataMyBackend });
@@ -1807,10 +1867,13 @@ async function goToParagraph(idx) {
 
     const projectId = state.activeProjectId;
     const currentProj = state.projects[projectId];
+    const isWholeMode = state.practiceMode === 'whole';
+    const dbParaIdx = isWholeMode ? 0 : (idx + 1);
 
-    if (currentProj && currentProj.recordedSet && currentProj.recordedSet.has(idx + 1)) {
+    // 檢查這個專案有沒有這個編號的錄音
+    if (currentProj && currentProj.recordedSet && currentProj.recordedSet.has(dbParaIdx)) {
         try {
-            const res = await fetch(`/check_audio?project_id=${projectId}&paragraph_index=${idx + 1}`);
+            const res = await fetch(`/check_audio?project_id=${projectId}&paragraph_index=${dbParaIdx}`);
             const data = await res.json();
 
             if (data.exists) {
@@ -3035,7 +3098,9 @@ async function _loadAndRenderProjectReport(projectId) {
 
         const resData = await response.json();
         if (resData.status === 'success') {
-            renderMultipleParagraphsReport(resData.paragraph_list, resData.global_stats);
+            // 💡 新增：帶入這個 project 實際的練習模式
+            const mode = _loadPracticeModeForProject(projectId) || 'segment';
+            renderMultipleParagraphsReport(resData.paragraph_list, resData.global_stats, mode);
         } else {
             showToast("彙整失敗: " + (resData.message || '未知錯誤'));
             _resetScorePanel();
