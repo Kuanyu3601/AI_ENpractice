@@ -1,0 +1,16 @@
+[33me998359[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m)[m 更新 .gitignore 忽略 tar 檔案新增圖片修改顯示方式
+M	.gitignore
+[33m67bbff0[m 修改顯示方式+圖片
+D	speech-api-v1.tar
+[33mdf7fedc[m 修改顯示方式+圖片
+A	backend-wer/Dockerfile
+A	backend-wer/Shark.txt
+A	backend-wer/Shark.wav
+A	backend-wer/main.py
+A	backend-wer/requirements.txt
+A	backend-wer/store.py
+A	backend-wer/test_api.py
+M	docker-compose.yml
+A	speech-api-v1.tar
+M	static/js/main.js
+M	templates/main.html

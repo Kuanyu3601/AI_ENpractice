@@ -13,6 +13,7 @@
 
     <script src="../static/js/navbar.js" defer></script>
     <script src="../static/js/main.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <title>page.front</title>
 </head>
 <body>
@@ -279,31 +280,6 @@
             <!-- ── Step 3: Score (Placeholder) ── -->
             <div class="step-panel" id="panel-2" style="width: 100% !important;">
                 <div class="score-section" style="width: 100% !important; max-width: 1000px; margin: 0 auto; padding: 20px; display: flex; flex-direction: column; gap: 24px; box-sizing: border-box;">
-
-                    <div class="wer-legend" style="background: #fafafa; border: 1px solid #e2e8f0; padding: 12px 20px; border-radius: 12px; font-size: 0.85rem; width: 100%; box-sizing: border-box;">
-                        <div style="display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; align-items: center;">
-                            <strong style="color: #4a5568; margin-right: 4px;">診斷狀態圖例：</strong>
-                            <div style="display: flex; align-items: center;"><span style="display:inline-block; width:10px; height:10px; background:#4ade80; border-radius:3px; margin-right:6px;"></span>正確 (Match)</div>
-                            <div style="display: flex; align-items: center;"><span style="display:inline-block; width:10px; height:10px; background:#9ca3af; border-radius:3px; margin-right:6px; text-decoration: line-through;"></span>漏讀 (Delete)</div>
-                            <div style="display: flex; align-items: center;"><span style="display:inline-block; width:10px; height:10px; background:#f87171; border-radius:3px; margin-right:6px;"></span>讀錯 (Sub)</div>
-                            <div style="display: flex; align-items: center;"><span style="display:inline-block; width:10px; height:10px; background:#fb923c; border-radius:3px; margin-right:6px;"></span>結巴 (Rep)</div>
-                            <div style="display: flex; align-items: center;"><span style="display:inline-block; width:10px; height:10px; background:#f472b6; border-radius:3px; margin-right:6px;"></span>嘗試 (Attempt)</div>
-                            <div style="display: flex; align-items: center;"><span style="display:inline-block; width:10px; height:10px; background:#a78bfa; border-radius:3px; margin-right:6px;"></span>重啟 (Restart)</div>
-                        </div>
-                    </div>
-
-                    <div style="width: 100%; text-align: left; margin-top: 10px;">
-                        <h3 style="color: #1f2937; margin: 0; font-size: 1.15rem; border-left: 4px solid #e63946; padding-left: 10px; font-weight: bold;">
-                            逐段朗讀細節與音檔回放
-                        </h3>
-                    </div>
-
-                    <div id="werParagraphsContainer" style="display: flex; flex-direction: column; gap: 14px; width: 100% !important; box-sizing: border-box;">
-                        <div style="background: #fff; border: 1px solid #e2e8f0; padding: 40px; border-radius: 12px; text-align: center; width: 100%; box-sizing: border-box;">
-                            <p style="color: #999; margin: 0; font-size: 0.95rem;">暫無分析資料，請先錄音並點擊結算。 🎉</p>
-                        </div>
-                    </div>
-
                     <div class="wer-score-banner" style="background: linear-gradient(135deg, #fff5f5 0%, #ffe3e3 100%); border: 2px solid #ffa3a3; padding: 22px 26px; border-radius: 16px; box-shadow: 0 4px 15px rgba(230, 57, 70, 0.05); width: 100% !important; box-sizing: border-box; margin-top: 20px;">
                         <h2 style="color: #e63946; margin: 0 0 18px 0; font-size: 1.2rem; text-align: left; border-left: 4px solid #e63946; padding-left: 8px; font-weight: bold;">📊 總體朗讀流暢度結算看板 (Total 平均)</h2>
 
@@ -330,6 +306,18 @@
                                 <span style="color: #666; font-size: 0.8rem; display: block;">平均 Varco</span>
                                 <strong id="werAvgVarco" style="color: #10b981; font-size: 1.8rem; display: block; margin-top: 5px; font-weight: bold;">0.00</strong>
                             </div>
+                        </div>
+                    </div>
+
+                    <div style="width: 100%; text-align: left; margin-top: 10px;">
+                        <h3 style="color: #1f2937; margin: 0; font-size: 1.15rem; border-left: 4px solid #e63946; padding-left: 10px; font-weight: bold;">
+                            段落詳細回報&分析
+                        </h3>
+                    </div>
+
+                    <div id="werParagraphsContainer" style="display: flex; flex-direction: column; gap: 14px; width: 100% !important; box-sizing: border-box;">
+                        <div style="background: #fff; border: 1px solid #e2e8f0; padding: 40px; border-radius: 12px; text-align: center; width: 100%; box-sizing: border-box;">
+                            <p style="color: #999; margin: 0; font-size: 0.95rem;">暫無分析資料，請先錄音並點擊結算。 🎉</p>
                         </div>
                     </div>
 
