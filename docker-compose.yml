@@ -30,5 +30,26 @@ services:
     # 💡 既然它已經是常駐網站了，原本為了強行喚醒而掛載的 /var/run/docker.sock 與 shared-data 都可以拔掉了，保持乾淨！
     volumes:
       - ${RECORDINGS_PATH:-./kids_recordings}:/app/data:rw
+
+  mysql:
+      image: mysql:8.0
+      environment:
+        MYSQL_ROOT_PASSWORD: yourpassword
+        MYSQL_DATABASE: project115
+      ports:
+        - "3306:3306"
+      volumes:
+        - mysql_data:/var/lib/mysql
+        
+  phpmyadmin:
+      image: phpmyadmin/phpmyadmin
+      ports:
+        - "8080:80"
+      environment:
+        PMA_HOST: mysql
+        PMA_USER: root
+        PMA_PASSWORD: yourpassword
+
 volumes:
+  mysql_data:
   shared-data:

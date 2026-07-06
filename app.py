@@ -19,10 +19,11 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
 # --- 2. 資料庫設定 ---
 db_config = {
-    'host': 'mysql.poyu39.tw',
-    'user': 'project115',
-    'password': 'project115',
+    'host': 'mysql',
+    'user': 'root',
+    'password': 'yourpassword',
     'database': 'project115',
+    'port' : 3306,
     'charset': 'utf8mb4'
 }
 
@@ -167,11 +168,7 @@ def upload_audio():
     cursor = conn.cursor()
 
     if mode == 'whole':
-        filename = f"{project_id}_full.wav"
-        para_idx = 0 # 💡 資料庫存 0
-    else:
-        filename = f"{project_id}_para{para_idx}.wav"
-        save_para_idx = para_idx # 存實際段落
+        para_idx = 0  # 💡 資料庫存 0
 
     try:
         cursor.execute("SELECT username, article_name, article_content FROM projects WHERE project_id = %s", (project_id,))
@@ -209,18 +206,23 @@ def upload_audio():
                 original_text = paragraphs_arr[para_idx - 1]
             except IndexError:
                 original_text = "What has fins sharp teeth and swims in the ocean a shark"
+
         # --- 初始化所有目標數據緩衝區 ---
         wer_stats = {"wer_repair_fluency": 0.0, "total_ref_words": len(original_text.split())}
         alignment_report = []
         chunks_list = []
         error_count = 0
-        
+
         npvi_score = 0.0
         varco_score = 0.0
-        
+
         full_wer_raw_json = {}
         full_npvi_raw_json = {}
         textgrid_filename = ""
+
+        # 💡 新增：實際落盤的 whisper 文字檔 / TextGrid 檔案路徑，稍後要寫進資料庫
+        whisper_text_db_path = None
+        textgrid_db_path = None
 
         try:
             # 準備第一發物料：原音檔與資料庫課文原文
@@ -233,28 +235,25 @@ def upload_audio():
 
             if wer_response.status_code == 200:
                 full_wer_raw_json = wer_response.json()
-                
+
                 wer_stats = full_wer_raw_json.get("statistics", {}) or {}
                 alignment_report = full_wer_raw_json.get("alignment_report", [])
                 error_count = sum(1 for item in alignment_report if item.get("Category") != "Match")
-                
-                # 🚀 1. 【逆向還原術】：從 alignment_report 還原出純文字
-                hyp_words = []
-                for item in alignment_report:
-                    hyp_word = item.get("Hypothesis", "")
-                    if hyp_word and hyp_word != "—" and hyp_word != "–":
-                        hyp_words.append(str(hyp_word).strip())
-                
-                constructed_whisper_text = " ".join(hyp_words).lower().strip()
-                print(f"🔬 [逆向還原成功] 準備送給 MFA 的文字: {constructed_whisper_text}", flush=True)
 
-                chunks_list = []
-                npvi_score = 0.0
-                varco_score = 0.0
-                textgrid_filename = ""
-                full_npvi_raw_json = {}
+                # 🚀 【核心修改】：不再自己從 alignment_report 逆向拼字還原文字，
+                #    改直接使用同學 WER API 新版回傳的 whisper_raw_text 欄位（真正的 Whisper 辨識全文）。
+                whisper_processed_text = (full_wer_raw_json.get("whisper_raw_text") or "").strip()
+                print(f"🔬 [直接取用] WER API 回傳的 whisper_raw_text: {whisper_processed_text}", flush=True)
 
-                # 🚀 2. 【回歸純網路呼叫】：直接以 HTTP POST 呼叫同學在 8501 埠開好的 API
+                # 💡 把 whisper 文字實際落盤成 .txt 檔，存到跟音檔同一個使用者資料夾，
+                #    檔名固定跟音檔對應，方便日後回溯查看這次辨識出的文字內容。
+                whisper_txt_filename = filename.replace(".wav", "_whisper.txt")
+                whisper_txt_save_path = os.path.join(user_dir, whisper_txt_filename)
+                with open(whisper_txt_save_path, 'w', encoding='utf-8') as wf:
+                    wf.write(whisper_processed_text)
+                whisper_text_db_path = f"/get_audio/{username}/{whisper_txt_filename}"
+
+                # 🚀 2. 呼叫同學在 8501 埠開好的 NPVI/MFA API，直接把 whisper_processed_text 當作文字檔傳過去
                 try:
                     user_age = request.form.get('age', 9)
                     try:
@@ -262,58 +261,61 @@ def upload_audio():
                     except:
                         user_age = 9
 
-                    # 💡 【記憶體微操】：直接在記憶體中將字串轉成 bytes 流，虛擬包裝成實體 .txt 檔案，省去實體硬碟讀寫！
-                    txt_filename = filename.replace(".wav", ".txt")
-                    text_bytes = constructed_whisper_text.encode('utf-8')
-                    
-                    # 打包準備傳送的雙檔案物件
+                    # 💡 直接用 whisper_processed_text 包裝成記憶體中的虛擬 .txt 檔案，送給 NPVI API
+                    npvi_txt_filename = filename.replace(".wav", ".txt")
+                    text_bytes = whisper_processed_text.encode('utf-8')
+
                     npvi_files = {
                         'audio_file': (filename, audio_bytes, 'audio/wav'),
-                        'text_file': (txt_filename, text_bytes, 'text/plain')
+                        'text_file': (npvi_txt_filename, text_bytes, 'text/plain')
                     }
-                    
-                    # 打包參數
-                    npvi_data = {
-                        'age': user_age
-                    }
+                    npvi_data = {'age': user_age}
 
-                    # 🎯 筆直對準同學在 docker-compose 虛擬網路中的服務名稱與 8501 埠
-                    # 💡 備註：後面的路徑（例如 /api/analyze）請依同學在 web_app.py 內實際宣告的路由為準！
-                    npvi_url = "http://backend-npvi:8000/api/analyze" 
+                    npvi_url = "http://backend-npvi:8000/api/analyze"
                     print(f"📡 [發送網路請求] 正在呼叫 {npvi_url} ...", flush=True)
-                    
+
                     npvi_response = requests.post(npvi_url, files=npvi_files, data=npvi_data, timeout=90)
                     print(f"📥 [同學網路回應狀態碼]: {npvi_response.status_code}", flush=True)
 
                     if npvi_response.status_code == 200:
                         speech_data = npvi_response.json()
                         full_npvi_raw_json = speech_data
-                        
-                        # 🚀 【神級修正點】：先剝開同學包裝的 "data" 外衣！
+
+                        # 先剝開同學包裝的 "data" 外衣
                         actual_data = speech_data.get("data", {})
-                        
-                        # 💡 改從 actual_data 裡面把資料抓出來
+
                         textgrid_filename = actual_data.get("file", "output.TextGrid")
                         chunks_list = actual_data.get("chunk_results") or []
                         overall = actual_data.get("overall_metrics", {}) or {}
-                        
+
+                        # 💡 新增：把 TextGrid 實際內容存成檔案。
+                        #    ⚠️ 這裡假設 NPVI API 回傳的 JSON 裡，TextGrid 內容放在 actual_data["textgrid_content"]。
+                        #    如果同學實際欄位名稱不是這個，請告訴我正確欄位名，我再幫你改這一行。
+                        textgrid_content = actual_data.get("textgrid_content")
+                        if textgrid_content:
+                            textgrid_save_filename = filename.replace(".wav", ".TextGrid")
+                            textgrid_save_path = os.path.join(user_dir, textgrid_save_filename)
+                            with open(textgrid_save_path, 'w', encoding='utf-8') as tg:
+                                tg.write(textgrid_content)
+                            textgrid_db_path = f"/get_audio/{username}/{textgrid_save_filename}"
+
                         raw_npvi_avg = overall.get("nPVI_overall", {}).get("syl")
                         raw_varco_avg = overall.get("Varco_overall", {}).get("syl")
-                        
+
                         if raw_npvi_avg is not None and raw_varco_avg is not None:
                             npvi_score = float(raw_npvi_avg) * 100
                             varco_score = float(raw_varco_avg) * 100
                         elif chunks_list and isinstance(chunks_list, list):
                             total_chunk_npvi = sum(float((c.get("nPVI") or {}).get("syl", 0)) * 100 for c in chunks_list if (c.get("nPVI") or {}).get("syl") is not None)
                             valid_npvi_count = sum(1 for c in chunks_list if (c.get("nPVI") or {}).get("syl") is not None)
-                            
+
                             total_chunk_varco = sum(float((c.get("Varco") or {}).get("syl", 0)) * 100 for c in chunks_list if (c.get("Varco") or {}).get("syl") is not None)
                             valid_varco_count = sum(1 for c in chunks_list if (c.get("Varco") or {}).get("syl") is not None)
-                            
+
                             if valid_npvi_count > 0: npvi_score = total_chunk_npvi / valid_npvi_count
                             if valid_varco_count > 0: varco_score = total_chunk_varco / valid_varco_count
                         else:
-                            npvi_score =0.00
+                            npvi_score = 0.00
                             varco_score = 0.00
                     else:
                         print(f"⚠️ 同學 API 回應異常，狀態碼: {npvi_response.status_code}, 內容: {npvi_response.text}", flush=True)
@@ -324,14 +326,6 @@ def upload_audio():
                     print(f"🚨 呼叫同學 API 發生異常，原因: {str(speech_err)}", flush=True)
                     npvi_score = 58.50
                     varco_score = 48.20
-
-                
-                # 💡 【檔案大掃除】：計算落盤完成後，把生成的臨時暫存 .txt 檔刪除，維持目錄純淨
-                try:
-                    if os.path.exists(txt_path):
-                        os.remove(txt_path)
-                except:
-                    pass
 
             else:
                 cursor.close()
@@ -349,28 +343,38 @@ def upload_audio():
         wer_score = round(float(wer_stats.get("wer_repair_fluency", 0.0)), 2)
         total_words = int(wer_stats.get("total_ref_words", 0))
 
-        # 🚀 4. 【智慧完整大打包】：一字不漏把雙邊的原始 JSON 外殼與 TextGrid 融合成一包文字型 JSON
+        # 🚀 【智慧完整大打包】：一字不漏把雙邊的原始 JSON 外殼融合成一包文字型 JSON
         extended_report = {
-            "textgrid_file_target": textgrid_filename, # 存下 TextGrid 檔名與關聯指標
-            "word_alignments": alignment_report,        # 完整的 ASR 錯字對照
-            "chunk_details": chunks_list,              # 切碎句子的 Chunks 細節
-            "raw_wer_output": full_wer_raw_json,       # 完整保留 backend-wer 產出的整份原始 JSON
-            "raw_npvi_output": full_npvi_raw_json      # 完整保留 backend-npvi 產出的整份原始 JSON
+            "textgrid_file_target": textgrid_filename,       # NPVI 端回傳的檔名（僅供參考）
+            "textgrid_path": textgrid_db_path,                # 💡 新增：我方實際落盤的 TextGrid 檔路徑
+            "whisper_text_path": whisper_text_db_path,        # 💡 新增：我方實際落盤的 whisper 文字檔路徑
+            "word_alignments": alignment_report,              # 完整的 ASR 錯字對照
+            "chunk_details": chunks_list,                     # 切碎句子的 Chunks 細節
+            "raw_wer_output": full_wer_raw_json,              # 完整保留 backend-wer 產出的整份原始 JSON
+            "raw_npvi_output": full_npvi_raw_json             # 完整保留 backend-npvi 產出的整份原始 JSON
         }
         alignment_json = json.dumps(extended_report, ensure_ascii=False)
 
         # --- 💾 MySQL 實體寫入區 ---
         db_path = f"/get_audio/{username}/{filename}"
         try:
+            # 💡 新增兩個欄位：whisper_text_path、textgrid_path
+            #    請先對資料庫執行一次（如果還沒有這兩個欄位）：
+            #    ALTER TABLE recordings ADD COLUMN whisper_text_path VARCHAR(255) NULL;
+            #    ALTER TABLE recordings ADD COLUMN textgrid_path VARCHAR(255) NULL;
             insert_sql = """
-               INSERT INTO recordings (project_id, paragraph_index, file_path, wer, total_words, error_count, alignment_report, npvi, varco)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+               INSERT INTO recordings (project_id, paragraph_index, file_path, wer, total_words, error_count,
+                                       alignment_report, npvi, varco, whisper_text_path, textgrid_path)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                ON DUPLICATE KEY UPDATE
-                  file_path = %s, wer = %s, total_words = %s, error_count = %s, alignment_report = %s, npvi = %s, varco = %s
+                  file_path = %s, wer = %s, total_words = %s, error_count = %s, alignment_report = %s,
+                  npvi = %s, varco = %s, whisper_text_path = %s, textgrid_path = %s
                """
             cursor.execute(insert_sql, (
-                project_id, para_idx, db_path, wer_score, total_words, error_count, alignment_json, npvi_score, varco_score,
-                db_path, wer_score, total_words, error_count, alignment_json, npvi_score, varco_score
+                project_id, para_idx, db_path, wer_score, total_words, error_count, alignment_json,
+                npvi_score, varco_score, whisper_text_db_path, textgrid_db_path,
+                db_path, wer_score, total_words, error_count, alignment_json,
+                npvi_score, varco_score, whisper_text_db_path, textgrid_db_path
             ))
             conn.commit()
         except Exception as db_err:
@@ -394,7 +398,9 @@ def upload_audio():
                 "npvi": npvi_score,
                 "varco": varco_score,
                 "chunk_details": chunks_list,
-                "textgrid_associated": textgrid_filename
+                "textgrid_associated": textgrid_filename,
+                "whisper_text_path": whisper_text_db_path,
+                "textgrid_path": textgrid_db_path
             }
         })
 
