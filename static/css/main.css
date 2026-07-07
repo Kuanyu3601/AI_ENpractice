@@ -1925,6 +1925,7 @@ body, html {
    ══════════════════════════════════════════════════ */
 .mask-image-area {
     display: none; /* 預設隱藏 */
+    position: relative;
 }
 
 /* 💡 核心修正：當 .visible 被加上時，強制突破父層的所有彈性限制，直接滿版撐開 */
@@ -1941,12 +1942,14 @@ body, html {
     height: 100% !important;
     min-height: 0 !important;
     box-sizing: border-box !important;
+
+
 }
 
 /* 💡 修正每個圖片外框的縮放權重 */
 .mask-img-slot {
-    flex: 1 1 0% !important;        /* 強制平分寬度，不允許縮小到 0 */
-    width: 100% !important;
+    flex: 1 1 0% !important;       /* 強制平分寬度，不允許縮小到 0 */
+    width: auto !important;
     height: 100% !important;
     max-width: 320px !important;     /* 限制最大寬度防止在大螢幕變形 */
     max-height: 100% !important;     /* 💡 修正：改為跟隨父層動態高度，而非寫死 300px */
@@ -1974,4 +1977,72 @@ body, html {
     color: #b0c8e0;
     text-align: center;
     user-select: none;
+}
+
+/* ══════════════════════════════════════════════════
+   FLIP CARD（點擊提示圖片翻面，顯示提示文字）
+   ══════════════════════════════════════════════════ */
+.flip-card {
+    width: 100%;
+    height: 100%;
+    perspective: 1000px;   /* 3D 翻轉的透視距離 */
+    cursor: pointer;
+}
+
+.flip-card-inner {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    transition: transform 0.6s;
+    transform-style: preserve-3d;
+}
+
+/* 加上 .is-flipped 時觸發翻轉 */
+.flip-card.is-flipped .flip-card-inner {
+    transform: rotateY(180deg);
+}
+
+.flip-card-front,
+.flip-card-back {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 5px;
+    overflow: hidden;
+}
+
+.flip-card-front {
+    background: #f0f5ff;
+}
+
+.flip-card-front img {
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: cover !important;
+    display: block !important;
+}
+
+.flip-card-back {
+    background: linear-gradient(135deg, #eef4ff 0%, #dce8fb 100%);
+    transform: rotateY(180deg);
+    padding: 12px;
+    box-sizing: border-box;
+    border: 2px solid rgba(85,133,181,0.35);
+}
+
+.flip-hint-text {
+    margin: 0;
+    font-size: clamp(0.75rem, 1.6vw, 1rem);
+    line-height: 1.5;
+    color: #2c4a6e;
+    text-align: center;
+    word-break: break-word;
+    user-select: none;
+    white-space: pre-line;
 }

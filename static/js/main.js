@@ -116,57 +116,86 @@ document.addEventListener('DOMContentLoaded', () => {
 // Kitten's_Choice 各段提示圖片設定
 // 格式：每個段落（索引0, 1, 2...）對應三張圖片的路徑
 // 請把 src 換成你實際的檔案路徑
+// 💡 翻牌功能：hint 欄位請自行填入該圖片對應的提示文字（點擊圖片翻面後會顯示這段文字）
+//    如果想換行，直接在字串裡打 \n 即可，例如：hint: '第一行\n第二行'
 var KITTENS_CHOICE_HINTS = [
     // 段落 1（index 0）
     [
-        { src: '/static/image/hint/kitten_101.webp', alt: '段落1 提示A' },
-        { src: '/static/image/hint/kitten_102.webp', alt: '段落1 提示B' },
-        { src: '/static/image/hint/kitten_103.webp', alt: '段落1 提示C' },
+        { src: '/static/image/hint/kitten_101.webp', alt: '段落1 提示A', hint: '...plays...\n...loves...' },
+        { src: '/static/image/hint/kitten_102.webp', alt: '段落1 提示B', hint: 'Her brother...,too.' },
+        { src: '/static/image/hint/kitten_103.webp', alt: '段落1 提示C', hint: 'When...it,\nher brother...play.' },
     ],
     // 段落 2（index 1）
     [
-        { src: '/static/image/hint/kitten_201.webp', alt: '段落2 提示A' },
-        { src: '/static/image/hint/kitten_202.webp', alt: '段落2 提示B' },
-        { src: '/static/image/hint/kitten_203.webp', alt: '段落2 提示C' },
+        { src: '/static/image/hint/kitten_201.webp', alt: '段落2 提示A', hint: 'Kitten...fun.' },
+        { src: '/static/image/hint/kitten_202.webp', alt: '段落2 提示B', hint: 'Then,...mouse!\n...chase...' },
+        { src: '/static/image/hint/kitten_203.webp', alt: '段落2 提示C', hint: 'If...the mouse,\nher brother...toy.' },
     ],
     // 段落 3（index 2）
     [
-        { src: '/static/image/hint/kitten_301.webp', alt: '段落3 提示A' },
-        { src: '/static/image/hint/kitten_302.webp', alt: '段落3 提示B' },
-        { src: '/static/image/hint/kitten_303.webp', alt: '段落3 提示C' },
+        { src: '/static/image/hint/kitten_301.webp', alt: '段落3 提示A', hint: '...thinks.\nShe...to play with.' },
+        { src: '/static/image/hint/kitten_302.webp', alt: '段落3 提示B', hint: 'If...mouse,\nher toy...her brother.' },
+        { src: '/static/image/hint/kitten_303.webp', alt: '段落3 提示C', hint: 'If...toy,\nthe mouse...away.\nWhich...?' },
     ],
     // 段落 4（index 3）
     [
-        { src: '/static/image/hint/kitten_401.webp', alt: '段落4 提示A' },
-        { src: '/static/image/hint/kitten_402.webp', alt: '段落4 提示B' },
-        { src: '/static/image/hint/kitten_403.webp', alt: '段落4 提示C' },
+        { src: '/static/image/hint/kitten_401.webp', alt: '段落4 提示A', hint: 'Kitten...mouse' },
+        { src: '/static/image/hint/kitten_402.webp', alt: '段落4 提示B', hint: 'She...mice,\nso that...fun.' },
+        { src: '/static/image/hint/kitten_403.webp', alt: '段落4 提示C', hint: 'She...mouse,\nbut...after him.\nKitten...choice.' },
     ],
 ];
 
 var SHARKS_HINTS = [
     // 段落 1（index 0）
     [
-        { src: '/static/image/hint/shark_101.webp', alt: '段落1 提示A' },
-        { src: '/static/image/hint/shark_102.webp', alt: '段落1 提示B' },
-        { src: '/static/image/hint/shark_103.webp', alt: '段落1 提示C' },
+        { src: '/static/image/hint/shark_101.webp', alt: '段落1 提示A', hint: '...fins,' },
+        { src: '/static/image/hint/shark_102.webp', alt: '段落1 提示B', hint: '...teeth,' },
+        { src: '/static/image/hint/shark_103.webp', alt: '段落1 提示C', hint: '...swims...?\nA...!' },
     ],
     // 段落 2（index 1）
     [
-        { src: '/static/image/hint/shark_201.webp', alt: '段落2 提示A' },
-        { src: '/static/image/hint/shark_202.webp', alt: '段落2 提示B' },
-        { src: '/static/image/hint/shark_203.webp', alt: '段落2 提示C' },
+        { src: '/static/image/hint/shark_201.webp', alt: '段落2 提示A', hint: 'Sharks...long time.\nSharks...dinosaurs!' },
+        { src: '/static/image/hint/shark_202.webp', alt: '段落2 提示B', hint: '...fish,\nand...types...\n' },
+        { src: '/static/image/hint/shark_203.webp', alt: '段落2 提示C', hint: '...babies,\n...pups.' },
     ],
     // 段落 3（index 2）
     [
-        { src: '/static/image/hint/shark_301.webp', alt: '段落3 提示A' },
-        { src: '/static/image/hint/shark_302.webp', alt: '段落3 提示B' },
-        { src: '/static/image/hint/shark_303.webp', alt: '段落3 提示C' },
+        { src: '/static/image/hint/shark_301.webp', alt: '段落3 提示A', hint: 'Sharks...teeth,\n...humans,' },
+        { src: '/static/image/hint/shark_302.webp', alt: '段落3 提示B', hint: 'but...baby teeth.\nThey...lives.' },
+        { src: '/static/image/hint/shark_303.webp', alt: '段落3 提示C', hint: 'When...tooth,\n...row...its place.\nNew...growing.' },
     ],
     // 段落 4（index 3）
     [
-        { src: '/static/image/hint/shark_401.webp', alt: '段落4 提示A' },
-        { src: '/static/image/hint/shark_402.webp', alt: '段落4 提示B' },
-        { src: '/static/image/hint/shark_403.webp', alt: '段落4 提示C' },
+        { src: '/static/image/hint/shark_401.webp', alt: '段落4 提示A', hint: 'Sharks...scary,\nbut...to people.' },
+        { src: '/static/image/hint/shark_402.webp', alt: '段落4 提示B', hint: 'People...to sharks,\nsince...sharks.' },
+        { src: '/static/image/hint/shark_403.webp', alt: '段落4 提示C', hint: 'To be...,\n...good idea...if...them!' },
+    ],
+];
+
+var HILL_HINTS = [
+    // 段落 1（index 0）
+    [
+        { src: '/static/image/hint/Hill_101.webp', alt: '段落1 提示A', hint: '...berries,\n...together.' },
+        { src: '/static/image/hint/Hill_102.webp', alt: '段落1 提示B', hint: 'What...sound?\nMonkey...scared.' },
+        { src: '/static/image/hint/Hill_103.webp', alt: '段落1 提示C', hint: 'Just...,\nthey...safe place.' },
+    ],
+    // 段落 2（index 1）
+    [
+        { src: '/static/image/hint/Hill_201.webp', alt: '段落2 提示A', hint: 'They...home.' },
+        { src: '/static/image/hint/Hill_202.webp', alt: '段落2 提示B', hint: 'Bird...,"The rain...Our...help."\nDeer...,"We...,but...!Let\'s...!"' },
+        { src: '/static/image/hint/Hill_203.webp', alt: '段落2 提示C', hint: 'First,...rocks.' },
+    ],
+    // 段落 3（index 2）
+    [
+        { src: '/static/image/hint/Hill_301.webp', alt: '段落3 提示A', hint: '"One,...!One,...!"' },
+        { src: '/static/image/hint/Hill_302.webp', alt: '段落3 提示B', hint: 'Second,...friends.\n"...okay?...safe?"' },
+        { src: '/static/image/hint/Hill_303.webp', alt: '段落3 提示C', hint: 'They...trees!' },
+    ],
+    // 段落 4（index 3）
+    [
+        { src: '/static/image/hint/Hill_401.webp', alt: '段落4 提示A', hint: 'Their...soil.' },
+        { src: '/static/image/hint/Hill_402.webp', alt: '段落4 提示B', hint: 'Everyone...plan!\nThey...seeds.\nThey...trees.' },
+        { src: '/static/image/hint/Hill_403.webp', alt: '段落4 提示C', hint: '"Now,...home!"' },
     ],
 ];
 
@@ -2112,6 +2141,7 @@ function _updateMaskSlots(paraIndex) {
 
     const isKitten = titleLower.includes("kitten's_choice") || titleLower.includes("kitten's choice") || titleLower.includes("kitten");
     const isShark  = titleLower.includes("sharks") || titleLower.includes("shark");
+    const isHill  = titleLower.includes("hill") || titleLower.includes("Hill");
 
     // 💡 容錯：同時支援 _p2 / -p2 / p2 (前面接底線、減號或空白)
     const paraMatch = articleTitleRaw.match(/[_\-\s]p(\d+)/i) || articleTitleRaw.match(/[_\-\s]s(\d+)/i);
@@ -2135,8 +2165,12 @@ function _updateMaskSlots(paraIndex) {
         let idx = safeIdx;
         if (idx < 0 || idx >= SHARKS_HINTS.length) idx = SHARKS_HINTS.length - 1;
         hintSet = SHARKS_HINTS[idx] || [];
-    } else {
-        console.warn('[遮擋警告] 標題既不符合 Kitten 也不符合 Shark，hintSet 為空');
+    } else if (isHill){
+        let idx = safeIdx;
+        if (idx < 0 || idx >= HILL_HINTS.length) idx = HILL_HINTS.length - 1;
+        hintSet = HILL_HINTS[idx] || [];
+    }else {
+        console.warn('[遮擋警告] 標題既不符合 Kitten 也不符合 Shark 與 Hill，hintSet 為空');
     }
 
     console.log(`[遮擋觸發] 最終使用段落索引:${safeIdx} 圖片數量: ${hintSet.length}`, hintSet);
@@ -2147,17 +2181,43 @@ function _updateMaskSlots(paraIndex) {
         while (slot.firstChild) slot.removeChild(slot.firstChild);
 
         if (imgData && imgData.src) {
+            // 💡 翻牌功能：外層 .flip-card 負責 3D 翻轉，內層分正面(圖片) / 背面(提示文字)
+            const flipCard = document.createElement('div');
+            flipCard.className = 'flip-card';
+
+            const flipInner = document.createElement('div');
+            flipInner.className = 'flip-card-inner';
+
+            const front = document.createElement('div');
+            front.className = 'flip-card-front';
+
             const img = document.createElement('img');
             img.src = imgData.src;
             img.alt = imgData.alt || '';
-            img.style.width = '100%';
-            img.style.height = '100%';
-            img.style.objectFit = 'cover';
             img.onerror = function() {
                 console.error(`❌ 圖片載入失敗！路徑: ${this.src}`);
-                slot.innerHTML = `<div style="font-size:0.65rem; color:#e63946; padding:5px; word-break:break-all;">圖片404<br>${this.src.substring(this.src.lastIndexOf('/'))}</div>`;
+                front.innerHTML = `<div style="font-size:0.65rem; color:#e63946; padding:5px; word-break:break-all;">圖片404<br>${this.src.substring(this.src.lastIndexOf('/'))}</div>`;
             };
-            slot.appendChild(img);
+            front.appendChild(img);
+
+            const back = document.createElement('div');
+            back.className = 'flip-card-back';
+            const hintText = document.createElement('p');
+            hintText.className = 'flip-hint-text';
+            // 💡 提示文字：請在 KITTENS_CHOICE_HINTS / SHARKS_HINTS / HILL_HINTS 內的 hint 欄位自行填入
+            hintText.textContent = imgData.hint && imgData.hint.trim() ? imgData.hint : '（尚未設定提示文字）';
+            back.appendChild(hintText);
+
+            flipInner.appendChild(front);
+            flipInner.appendChild(back);
+            flipCard.appendChild(flipInner);
+
+            // 點擊卡片即可翻面，再點一次翻回去
+            flipCard.addEventListener('click', () => {
+                flipCard.classList.toggle('is-flipped');
+            });
+
+            slot.appendChild(flipCard);
         } else {
             const ph = document.createElement('div');
             ph.className = 'mask-img-placeholder';
@@ -2166,7 +2226,122 @@ function _updateMaskSlots(paraIndex) {
             slot.appendChild(ph);
         }
     });
+
+    // 💡 整篇練習模式：遮擋圖片區也要比照文字模式，右下角「下一段」、非第一段時左下角「上一段」
+    //    每次重繪都先清掉舊的換頁按鈕，避免重複疊加
+    const maskArea = document.getElementById('maskImageArea');
+    if (maskArea) {
+        const oldNav = maskArea.querySelector('.mask-nav-arrows');
+        if (oldNav) oldNav.remove();
+
+        const isWhole = state.practiceMode === 'whole';
+        if (isWhole && state.article && Array.isArray(state.article.paragraphs)) {
+            const totalParas = state.article.paragraphs.length;
+            const curIdx = (typeof state.currentParagraph === 'number') ? state.currentParagraph : 0;
+            const hasPrev = curIdx > 0;
+            const hasNext = curIdx < totalParas - 1;
+
+            const navWrap = document.createElement('div');
+            navWrap.className = 'mask-nav-arrows lyric-nav-arrows';
+
+            if (hasPrev) {
+                const prevBtn = document.createElement('button');
+                prevBtn.type = 'button';
+                prevBtn.className = 'lyric-nav-arrow lyric-nav-prev';
+                prevBtn.title = '上一段';
+                prevBtn.innerHTML = '&#8592;';
+                prevBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    switchWholeParagraphView(curIdx - 1);
+                });
+                navWrap.appendChild(prevBtn);
+            } else {
+                const phPrev = document.createElement('span');
+                phPrev.className = 'lyric-nav-arrow lyric-nav-placeholder';
+                navWrap.appendChild(phPrev);
+            }
+
+            if (hasNext) {
+                const nextBtn = document.createElement('button');
+                nextBtn.type = 'button';
+                nextBtn.className = 'lyric-nav-arrow lyric-nav-next';
+                nextBtn.title = '下一段';
+                nextBtn.innerHTML = '&#8594;';
+                nextBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    switchWholeParagraphView(curIdx + 1);
+                });
+                navWrap.appendChild(nextBtn);
+            } else {
+                const phNext = document.createElement('span');
+                phNext.className = 'lyric-nav-arrow lyric-nav-placeholder';
+                navWrap.appendChild(phNext);
+            }
+
+            maskArea.appendChild(navWrap);
+        }
+    }
+
+    // 💡 圖片(卡片)重新產生後，立即用 JS 重新計算一次正方形邊長
+    //    用 requestAnimationFrame 是為了等瀏覽器先把上面 DOM 異動排版完，量到的容器尺寸才準
+    requestAnimationFrame(_resizeMaskSlots);
 }
+
+/**
+ * 💡 正方形保證器：不依賴 CSS 的 aspect-ratio（在 flexbox 情境下不一定可靠），
+ *    改成直接量測 .mask-image-area 目前的可用寬度／高度，
+ *    取「三張圖平分寬度」與「容器高度」兩者中較小值當作正方形邊長，
+ *    並用 setProperty(..., 'important') 蓋掉 CSS 裡的 !important，強制寫死 px。
+ *    這樣無論視窗寬高比例怎麼變，三張圖永遠是正方形，只有整體大小會跟著縮放。
+ */
+function _resizeMaskSlots() {
+    const area = document.getElementById('maskImageArea');
+    if (!area || !area.classList.contains('visible')) return;
+
+    const slots = [
+        document.getElementById('maskSlot0'),
+        document.getElementById('maskSlot1'),
+        document.getElementById('maskSlot2'),
+    ].filter(Boolean);
+    if (!slots.length) return;
+
+    const areaStyle = getComputedStyle(area);
+    const padLeft    = parseFloat(areaStyle.paddingLeft)   || 0;
+    const padRight   = parseFloat(areaStyle.paddingRight)  || 0;
+    const padTop     = parseFloat(areaStyle.paddingTop)    || 0;
+    const padBottom  = parseFloat(areaStyle.paddingBottom) || 0;
+    const gap        = parseFloat(areaStyle.columnGap || areaStyle.gap) || 16;
+
+    const rect = area.getBoundingClientRect();
+    const availableWidth  = rect.width  - padLeft - padRight  - gap * (slots.length - 1);
+    const availableHeight = rect.height - padTop  - padBottom;
+
+    // 正方形邊長 = min(平分後的寬度, 容器高度, 320px上限)
+    let size = Math.min(availableWidth / slots.length, availableHeight, 320);
+    if (!isFinite(size) || size < 20) size = 20; // 極端情況下的保底最小值，避免縮成 0 或負值
+
+    slots.forEach(slot => {
+        slot.style.setProperty('width',  size + 'px', 'important');
+        slot.style.setProperty('height', size + 'px', 'important');
+        slot.style.setProperty('flex', '0 0 auto', 'important');
+    });
+}
+
+// 💡 視窗大小改變時（包含寬高比例改變）即時重新計算正方形邊長
+window.addEventListener('resize', () => {
+    clearTimeout(window._maskResizeTimer);
+    window._maskResizeTimer = setTimeout(_resizeMaskSlots, 80);
+});
+
+// 💡 更保險：用 ResizeObserver 盯著容器本身，
+//    涵蓋「側欄收合/展開」「視窗縮放」等所有會改變可用空間、但不一定觸發 window resize 事件的狀況
+document.addEventListener('DOMContentLoaded', () => {
+    const wrapperEl = document.querySelector('.lyrics-wrapper');
+    if (wrapperEl && typeof ResizeObserver !== 'undefined') {
+        const maskRO = new ResizeObserver(() => _resizeMaskSlots());
+        maskRO.observe(wrapperEl);
+    }
+});
 
 function initMaskBtn() {
     const maskBtn = document.getElementById('maskBtn');
