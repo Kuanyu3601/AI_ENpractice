@@ -20,7 +20,7 @@ services:
       - ./models:/root/.cache/whisper
 
   backend-npvi:   
-    image: speech-api:v1  # 🚀【核心更換】：換成組員給的新網站映像檔名字
+    image: speech-api:v2  # 🚀【核心更換】：換成組員給的新網站映像檔名字
     container_name: backend-npvi-1
     restart: always
     ports:

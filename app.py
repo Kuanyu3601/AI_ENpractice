@@ -8,7 +8,7 @@ from werkzeug.security import generate_password_hash
 from werkzeug.security import generate_password_hash, check_password_hash
 import random
 import re
-import shutil 
+import shutil
 
 app = Flask(__name__)
 app.secret_key = 'any_secret_string_here'
@@ -18,6 +18,12 @@ UPLOAD_FOLDER = 'kids_recordings'
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+# 💡 改法：不用共用 docker volume 了，同學提供了一個下載 API，
+#    直接呼叫這個內部網址就能拿到 TextGrid 檔案的實際內容。
+#    ⚠️ 這裡用的是 docker-compose 的服務名稱 backend-npvi，
+#       不是給瀏覽器用的外部 IP，因為這支呼叫是從 web 容器內部發出的。
+TEXTGRID_DOWNLOAD_URL_TEMPLATE = "http://backend-npvi:8000/api/download/textgrid/{filename}"
 
 # --- 2. 資料庫設定 ---
 db_config = {
@@ -36,7 +42,7 @@ def get_db_connection():
     except Exception as e:
         print(f"連線失敗: {e}")
         return None
-    
+
 def split_paragraphs(article_content):
     """
     💡 核心修正：跟前端 JS 的 text.split(/\\n\\s*\\n/) 規則一致，
@@ -45,65 +51,52 @@ def split_paragraphs(article_content):
     """
     parts = re.split(r'\n\s*\n', article_content)
     return [p.strip() for p in parts if p.strip()]
- 
- 
+
+
 def _escape_textgrid_text(text):
     """
     💡 Praat TextGrid 文字格式規則：字串裡如果有雙引號，要用兩個雙引號跳脫（""）。
     """
     return (text or "").replace('"', '""')
- 
- 
+
+
 def build_textgrid_from_chunks(chunk_results, total_time_sec, tier_name="chunks"):
     """
-    💡 【核心新增】：自己動手組一份 Praat long-format TextGrid 檔案文字內容。
- 
-    背景：NPVI API 那邊產生的 .TextGrid 只存在於它自己容器內部的暫存資料夾，
-         API 回應完成後就被刪除，我們這邊完全拿不到那份原始檔案，
-         而且要修改同學的程式碼才能解決（見前面討論）。
- 
-    解法：NPVI API 回傳的 JSON 裡，chunk_results 陣列本身就包含了
-         每個語塊的起訖時間 (xmin/xmax) 與文字內容 (label)，
-         這些資訊已經足夠讓我們自己重建出一份「語塊層級」的 TextGrid，
-         完全不需要依賴同學那邊回傳原始檔案內容。
- 
-    參數：
-        chunk_results: 例如 raw_npvi_output['data']['chunk_results']，
-                        每筆需要有 'xmin', 'xmax', 'label' 欄位
-        total_time_sec: 整段音檔的總長度（秒），例如 raw_npvi_output['data']['total_time_sec']
-        tier_name: 這個 tier 要取的名字，預設 "chunks"
- 
-    回傳：
-        Praat TextGrid 檔案的完整文字內容（字串），可以直接寫檔存成 .TextGrid
+    💡 【備援用】：自己動手組一份 Praat long-format TextGrid 檔案文字內容。
+
+    現在同學那邊已經把 TextGrid 實際存到共用資料夾了（見 SAVED_TEXTGRIDS_FOLDER），
+    正常情況下 upload_audio() 會優先直接讀那份真正的檔案，
+    這個函式只在共用資料夾裡找不到對應檔案時，當作備援方案使用，
+    確保就算同學那邊某次沒有正確產出檔案，畫面還是有東西可以顯示，不會整個報錯。
     """
     if not chunk_results:
         chunk_results = []
- 
+
     # 依 xmin 排序，確保時間軸正確
     sorted_chunks = sorted(chunk_results, key=lambda c: c.get('xmin', 0))
- 
+
     intervals = []
     cursor_time = 0.0
- 
+
     for chunk in sorted_chunks:
         c_xmin = float(chunk.get('xmin', cursor_time))
         c_xmax = float(chunk.get('xmax', c_xmin))
         label = chunk.get('label', '')
- 
+
         # 💡 Praat 的 IntervalTier 要求時間軸連續無縫，
         #    如果這個語塊跟上一個語塊之間有空隙（停頓），要補一個空白文字的 interval 填滿
         if c_xmin > cursor_time + 0.0001:
             intervals.append((cursor_time, c_xmin, ""))
- 
+
         intervals.append((c_xmin, c_xmax, label))
         cursor_time = c_xmax
- 
+
     # 補齊尾端到總長度的空白區間
     if total_time_sec and cursor_time < float(total_time_sec) - 0.0001:
         intervals.append((cursor_time, float(total_time_sec), ""))
- 
+
     final_xmax = float(total_time_sec) if total_time_sec else (intervals[-1][1] if intervals else 0.0)
- 
+
     lines = []
     lines.append('File type = "ooTextFile"')
     lines.append('Object class = "TextGrid"')
@@ -119,14 +112,119 @@ def build_textgrid_from_chunks(chunk_results, total_time_sec, tier_name="chunks"
     lines.append('        xmin = 0')
     lines.append(f'        xmax = {final_xmax}')
     lines.append(f'        intervals: size = {len(intervals)}')
- 
+
     for idx, (xmin, xmax, text) in enumerate(intervals, start=1):
         lines.append(f'        intervals [{idx}]:')
         lines.append(f'            xmin = {xmin}')
         lines.append(f'            xmax = {xmax}')
         lines.append(f'            text = "{_escape_textgrid_text(text)}"')
- 
+
     return '\n'.join(lines) + '\n'
+
+
+def fetch_real_textgrid(textgrid_filename, user_dir, dest_filename):
+    """
+    💡 【改版】：不用共用 docker volume 了，直接呼叫同學提供的下載 API，
+       拿到真正的 TextGrid 檔案內容後存進使用者的錄音資料夾；
+       下載失敗（檔名對不上、API 還沒跑完、逾時...等）就回傳 None，
+       讓呼叫端自己決定要不要退回 build_textgrid_from_chunks() 的備援方案。
+
+    參數：
+        textgrid_filename: NPVI API 回傳的 actual_data.get("file")，例如
+                            "hill01_syl.TextGrid"
+        user_dir: 這位使用者的錄音資料夾（跟音檔存在一起）
+        dest_filename: 要落盤存放的檔名（通常是 "{原本音檔檔名}.TextGrid"）
+
+    回傳：
+        成功：實際落盤的完整路徑字串
+        失敗：None
+    """
+    if not textgrid_filename:
+        return None
+
+    # 💡 暫時修正：同學這次改版後，實際存檔的檔名不含 "_syl"，
+    #    但 NPVI API 的 JSON 回應裡 "file" 欄位還沒跟著更新，
+    #    這裡先手動把 "_syl" 拿掉再去下載。
+    #    ⚠️ 這是暫時的權宜寫法，如果同學之後把 JSON 回應也修正了，
+    #       這行可以拿掉，直接用 textgrid_filename 本身即可。
+    corrected_filename = textgrid_filename.replace('_syl.TextGrid', '.TextGrid')
+
+    download_url = TEXTGRID_DOWNLOAD_URL_TEMPLATE.format(filename=corrected_filename)
+
+    try:
+        resp = requests.get(download_url, timeout=30)
+        if resp.status_code != 200:
+            print(f"⚠️ 下載 TextGrid 失敗，狀態碼: {resp.status_code}，網址: {download_url}", flush=True)
+            return None
+
+        dest_path = os.path.join(user_dir, dest_filename)
+        with open(dest_path, 'wb') as f:
+            f.write(resp.content)
+
+        print(f"✅ 成功透過 API 下載同學的真正 TextGrid: {download_url} → {dest_path}", flush=True)
+        return dest_path
+
+    except Exception as download_err:
+        print(f"🚨 下載 TextGrid 發生例外: {download_err}，網址: {download_url}", flush=True)
+        return None
+
+
+def parse_textgrid_words(textgrid_content, tier_name="words"):
+    """
+    💡 【核心新增】：解析 Praat long-format TextGrid 檔案內容，
+       抓出指定 tier（預設 "words"）裡每一個「非空白」interval 的逐字時間戳。
+
+       同學提供的 TextGrid 通常有兩個 tier：
+         - "words"：逐字的起訖時間（我們要的就是這個）
+         - "phones"：逐音位（ARPA 音標）的起訖時間，這次先不用
+
+       參數：
+           textgrid_content: TextGrid 檔案的完整文字內容（字串）
+           tier_name: 要抓哪個 tier，預設 "words"
+
+       回傳：
+           [{"xmin": 0.27, "xmax": 0.45, "text": "you"}, ...]
+           （只保留 text 不是空字串的 interval，空字串代表停頓/靜音，不需要）
+    """
+    if not textgrid_content:
+        return []
+
+    try:
+        # 💡 用 "item [n]:" 把整份檔案切成一段一段的 tier 區塊，
+        #    第一段是檔案最上面共用的表頭（不是任何 tier），之後每一段對應一個 tier。
+        tier_blocks = re.split(r'item\s*\[\d+\]:', textgrid_content)
+
+        target_block = None
+        for block in tier_blocks:
+            if re.search(rf'name\s*=\s*"{re.escape(tier_name)}"', block):
+                target_block = block
+                break
+
+        if not target_block:
+            print(f"⚠️ TextGrid 裡找不到名為 \"{tier_name}\" 的 tier", flush=True)
+            return []
+
+        # 💡 這個正規表達式只會在「xmin/xmax 後面緊接著就是 text=」的地方命中，
+        #    剛好就是每一個 intervals [i]: 區塊，不會誤吃到 tier 本身開頭的 xmin/xmax
+        #    （因為 tier 開頭的 xmin/xmax 後面接的是 "intervals: size = N"，中間隔了文字，正規表達式吃不過去）
+        pattern = re.compile(
+            r'xmin\s*=\s*([\d.]+)\s*xmax\s*=\s*([\d.]+)\s*text\s*=\s*"([^"]*)"'
+        )
+
+        words = []
+        for m in pattern.finditer(target_block):
+            xmin = float(m.group(1))
+            xmax = float(m.group(2))
+            text = m.group(3).strip()
+            if text:  # 跳過空字串的停頓區段
+                words.append({"xmin": xmin, "xmax": xmax, "text": text})
+
+        return words
+
+    except Exception as parse_err:
+        print(f"🚨 解析 TextGrid words tier 失敗: {parse_err}", flush=True)
+        return []
+
 
 # --- 3. 基礎路由 (頁面跳轉) ---
 @app.route('/')
@@ -154,7 +252,7 @@ def register():
 
     conn = get_db_connection()
     if conn is None:
-        return "<h3>資料庫連線失敗</h3><p>請確認 VPN 已開啟。</p>"
+        return "<h3>資料庫連線失敗</h3><p>請確認資料庫服務是否已啟動。</p>"
 
     try:
         cursor = conn.cursor()
@@ -244,51 +342,51 @@ def upload_audio():
     project_id = request.form.get('project_id')
     mode = request.form.get('mode', 'segment')
     para_idx = request.form.get('paragraph_index')
- 
+
     try:
         para_idx = int(para_idx)
     except:
         return jsonify({"status": "error", "message": "段落編號錯誤"})
- 
+
     audio_file = request.files.get('audio_data')
     if not audio_file:
         return jsonify({"status": "error", "message": "後端沒有收到任何錄音音檔 (audio_data 為空)"})
- 
+
     conn = get_db_connection()
     if conn is None:
-        return jsonify({"status": "error", "message": "後端連不上 MySQL 資料庫，請檢查 VPN 或資料庫設定"})
- 
+        return jsonify({"status": "error", "message": "後端連不上 MySQL 資料庫，請檢查資料庫設定"})
+
     cursor = conn.cursor()
- 
+
     if mode == 'whole':
         para_idx = 0
- 
+
     try:
         cursor.execute("SELECT username, article_name, article_content FROM projects WHERE project_id = %s", (project_id,))
         result = cursor.fetchone()
- 
+
         if not result:
             cursor.close()
             conn.close()
             return jsonify({"status": "error", "message": f"資料庫找不到此 project_id: {project_id}"})
- 
+
         username = result[0]
         article_name = result[1]
         article_content = result[2] or ""
         filename = f"{project_id}_para{para_idx}.wav"
- 
+
         user_dir = os.path.join(app.config['UPLOAD_FOLDER'], username)
         if not os.path.exists(user_dir):
             os.makedirs(user_dir)
         save_path = os.path.join(user_dir, filename)
- 
+
         audio_bytes = audio_file.read()
         with open(save_path, 'wb') as f:
             f.write(audio_bytes)
- 
+
         # 💡 段落切分：跟前端一致的規則
         paragraphs_arr = split_paragraphs(article_content)
- 
+
         if mode == 'whole':
             original_text = " ".join(paragraphs_arr)
         else:
@@ -296,111 +394,129 @@ def upload_audio():
                 original_text = paragraphs_arr[para_idx - 1]
             except IndexError:
                 original_text = "What has fins sharp teeth and swims in the ocean a shark"
- 
+
         print(f"🔍 [切段落除錯] mode={mode}, para_idx={para_idx}, "
               f"總段落數={len(paragraphs_arr)}, 本次送給WER的原文長度={len(original_text)}字元", flush=True)
- 
+
         wer_stats = {"wer_repair_fluency": 0.0, "total_ref_words": len(original_text.split())}
         alignment_report = []
         chunks_list = []
         error_count = 0
- 
+
         npvi_score = 0.0
         varco_score = 0.0
- 
+
         full_wer_raw_json = {}
         full_npvi_raw_json = {}
         textgrid_filename = ""
- 
+
         whisper_text_db_path = None
         textgrid_db_path = None
- 
+        word_timings = []
+
         try:
             wer_files = {'audio_file': (filename, audio_bytes, 'audio/wav')}
             wer_data_payload = {'original_text': original_text}
- 
+
             wer_url = "http://backend-wer:8000/api/analyze-reading"
             wer_response = requests.post(wer_url, files=wer_files, data=wer_data_payload, timeout=90)
- 
+
             if wer_response.status_code == 200:
                 full_wer_raw_json = wer_response.json()
- 
+
                 wer_stats = full_wer_raw_json.get("statistics", {}) or {}
                 alignment_report = full_wer_raw_json.get("alignment_report", [])
                 error_count = sum(1 for item in alignment_report if item.get("Category") != "Match")
- 
+
                 whisper_processed_text = (full_wer_raw_json.get("whisper_raw_text") or "").strip()
                 print(f"🔬 [直接取用] WER API 回傳的 whisper_raw_text: {whisper_processed_text}", flush=True)
- 
+
                 whisper_txt_filename = filename.replace(".wav", "_whisper.txt")
                 whisper_txt_save_path = os.path.join(user_dir, whisper_txt_filename)
                 with open(whisper_txt_save_path, 'w', encoding='utf-8') as wf:
                     wf.write(whisper_processed_text)
                 whisper_text_db_path = f"/get_audio/{username}/{whisper_txt_filename}"
- 
+
                 try:
                     user_age = request.form.get('age', 9)
                     try:
                         user_age = int(user_age)
                     except:
                         user_age = 9
- 
+
                     npvi_txt_filename = filename.replace(".wav", ".txt")
                     text_bytes = whisper_processed_text.encode('utf-8')
- 
+
                     npvi_files = {
                         'audio_file': (filename, audio_bytes, 'audio/wav'),
                         'text_file': (npvi_txt_filename, text_bytes, 'text/plain')
                     }
                     npvi_data = {'age': user_age}
- 
+
                     npvi_url = "http://backend-npvi:8000/api/analyze"
                     print(f"📡 [發送網路請求] 正在呼叫 {npvi_url} ...", flush=True)
- 
+
                     npvi_response = requests.post(npvi_url, files=npvi_files, data=npvi_data, timeout=90)
                     print(f"📥 [同學網路回應狀態碼]: {npvi_response.status_code}", flush=True)
- 
+
                     if npvi_response.status_code == 200:
                         speech_data = npvi_response.json()
                         full_npvi_raw_json = speech_data
- 
+
                         actual_data = speech_data.get("data", {})
- 
+
                         textgrid_filename = actual_data.get("file", "output.TextGrid")
                         chunks_list = actual_data.get("chunk_results") or []
                         overall = actual_data.get("overall_metrics", {}) or {}
                         total_time_sec = actual_data.get("total_time_sec")
- 
-                        # 🚀 【核心新增】：自己組一份 TextGrid，不再依賴同學回傳實際檔案內容
-                        try:
-                            if chunks_list:
-                                textgrid_text_content = build_textgrid_from_chunks(
-                                    chunks_list, total_time_sec
-                                )
-                                textgrid_save_filename = filename.replace(".wav", ".TextGrid")
+
+                        # 🚀 【核心修改】：優先讀同學實際產出、存在共用資料夾裡的真正 TextGrid，
+                        #    讀不到才退回自己組的備援版本。
+                        textgrid_save_filename = filename.replace(".wav", ".TextGrid")
+                        real_textgrid_path = fetch_real_textgrid(textgrid_filename, user_dir, textgrid_save_filename)
+
+                        # 💡 新增：逐字時間戳（來自真正 TextGrid 的 "words" tier），
+                        #    有拿到才能做真正的逐字對齊；拿不到就是空陣列，
+                        #    前端會自動退回原本「用字數比例分配」的近似做法。
+                        word_timings = []
+
+                        if real_textgrid_path:
+                            textgrid_db_path = f"/get_audio/{username}/{textgrid_save_filename}"
+                            try:
+                                with open(real_textgrid_path, 'r', encoding='utf-8') as tgf:
+                                    real_textgrid_content = tgf.read()
+                                word_timings = parse_textgrid_words(real_textgrid_content, tier_name="words")
+                                print(f"✅ 從真正的 TextGrid 解析出 {len(word_timings)} 個逐字時間戳", flush=True)
+                            except Exception as parse_err:
+                                print(f"🚨 讀取/解析剛下載的 TextGrid 失敗: {parse_err}", flush=True)
+                        elif chunks_list:
+                            # 備援：共用資料夾讀不到才自己組一份
+                            try:
+                                textgrid_text_content = build_textgrid_from_chunks(chunks_list, total_time_sec)
                                 textgrid_save_path = os.path.join(user_dir, textgrid_save_filename)
                                 with open(textgrid_save_path, 'w', encoding='utf-8') as tg:
                                     tg.write(textgrid_text_content)
                                 textgrid_db_path = f"/get_audio/{username}/{textgrid_save_filename}"
-                                print(f"✅ 已自行組出並落盤 TextGrid: {textgrid_save_path}", flush=True)
-                            else:
-                                print("⚠️ chunk_results 是空的，無法組出 TextGrid。", flush=True)
-                        except Exception as tg_build_err:
-                            print(f"🚨 組建 TextGrid 失敗: {tg_build_err}", flush=True)
- 
+                                print(f"⚠️ 改用備援方案自行組出 TextGrid: {textgrid_save_path}", flush=True)
+                                # 備援版本只有 chunk 層級的資料，沒有真正的逐字時間戳，word_timings 維持空陣列
+                            except Exception as tg_build_err:
+                                print(f"🚨 備援組建 TextGrid 也失敗: {tg_build_err}", flush=True)
+                        else:
+                            print("⚠️ 共用資料夾讀不到、chunk_results 也是空的，這次沒有 TextGrid 可用。", flush=True)
+
                         raw_npvi_avg = overall.get("nPVI_overall", {}).get("syl")
                         raw_varco_avg = overall.get("Varco_overall", {}).get("syl")
- 
+
                         if raw_npvi_avg is not None and raw_varco_avg is not None:
                             npvi_score = float(raw_npvi_avg) * 100
                             varco_score = float(raw_varco_avg) * 100
                         elif chunks_list and isinstance(chunks_list, list):
                             total_chunk_npvi = sum(float((c.get("nPVI") or {}).get("syl", 0)) * 100 for c in chunks_list if (c.get("nPVI") or {}).get("syl") is not None)
                             valid_npvi_count = sum(1 for c in chunks_list if (c.get("nPVI") or {}).get("syl") is not None)
- 
+
                             total_chunk_varco = sum(float((c.get("Varco") or {}).get("syl", 0)) * 100 for c in chunks_list if (c.get("Varco") or {}).get("syl") is not None)
                             valid_varco_count = sum(1 for c in chunks_list if (c.get("Varco") or {}).get("syl") is not None)
- 
+
                             if valid_npvi_count > 0: npvi_score = total_chunk_npvi / valid_npvi_count
                             if valid_varco_count > 0: varco_score = total_chunk_varco / valid_varco_count
                         else:
@@ -410,38 +526,39 @@ def upload_audio():
                         print(f"⚠️ 同學 API 回應異常，狀態碼: {npvi_response.status_code}, 內容: {npvi_response.text}", flush=True)
                         npvi_score = 58.50
                         varco_score = 48.20
- 
+
                 except Exception as speech_err:
                     print(f"🚨 呼叫同學 API 發生異常，原因: {str(speech_err)}", flush=True)
                     npvi_score = 58.50
                     varco_score = 48.20
- 
+
             else:
                 cursor.close()
                 conn.close()
                 return jsonify({"status": "error", "message": f"backend-wer 容器回應狀態碼錯誤: {wer_response.status_code}"})
- 
+
         except Exception as err:
             cursor.close()
             conn.close()
             return jsonify({"status": "error", "message": f"Pipeline 連線調度鏈發生死鎖崩潰: {str(err)}"})
- 
+
         npvi_score = round(float(npvi_score), 2)
         varco_score = round(float(varco_score), 2)
         wer_score = round(float(wer_stats.get("wer_repair_fluency", 0.0)), 2)
         total_words = int(wer_stats.get("total_ref_words", 0))
- 
+
         extended_report = {
             "textgrid_file_target": textgrid_filename,
             "textgrid_path": textgrid_db_path,
             "whisper_text_path": whisper_text_db_path,
             "word_alignments": alignment_report,
             "chunk_details": chunks_list,
+            "word_timings": word_timings,
             "raw_wer_output": full_wer_raw_json,
             "raw_npvi_output": full_npvi_raw_json
         }
         alignment_json = json.dumps(extended_report, ensure_ascii=False)
- 
+
         db_path = f"/get_audio/{username}/{filename}"
         try:
             insert_sql = """
@@ -461,10 +578,10 @@ def upload_audio():
             conn.commit()
         except Exception as db_err:
             print(f"🚨 MySQL 實體落盤失敗，死因: {str(db_err)}")
- 
+
         cursor.close()
         conn.close()
- 
+
         return jsonify({
             "status": "success",
             "url": db_path,
@@ -479,17 +596,18 @@ def upload_audio():
                 "npvi": npvi_score,
                 "varco": varco_score,
                 "chunk_details": chunks_list,
+                "word_timings": word_timings,
                 "textgrid_associated": textgrid_filename,
                 "whisper_text_path": whisper_text_db_path,
                 "textgrid_path": textgrid_db_path
             }
         })
- 
+
     except Exception as global_err:
         if 'cursor' in locals() and cursor: cursor.close()
         if 'conn' in locals() and conn: conn.close()
         return jsonify({"status": "error", "message": f"後端 upload_audio 發生未預期崩潰: {str(global_err)}"})
-       
+
 @app.route('/get_project_total_report', methods=['GET'])
 def get_project_total_report():
     project_id = request.args.get('project_id')
@@ -500,9 +618,8 @@ def get_project_total_report():
     cursor = conn.cursor(dictionary=True)
 
     try:
-        # 1. 先去 projects 表撈出這篇文章總共有幾段
         cursor.execute("SELECT article_content FROM projects WHERE project_id = %s", (project_id,))
-        project_row = project_row = cursor.fetchone()
+        project_row = cursor.fetchone()
         if not project_row:
             cursor.close()
             conn.close()
@@ -510,14 +627,11 @@ def get_project_total_report():
 
         article_content = project_row['article_content'] or ""
 
-        # 將 p.trim() 修改為 Python 的 p.strip()
         total_paragraphs_count = len(split_paragraphs(article_content))
 
-        # 防呆：如果切出來是 0，預設給 4 段
         if total_paragraphs_count == 0:
             total_paragraphs_count = 4
 
-        # 2. 撈取現有的錄音紀錄 ── 🚀【實體追加】：SELECT 加入 npvi 與 varco 欄位
         sql = """
             SELECT paragraph_index, file_path, wer, total_words, error_count, alignment_report, npvi, varco
             FROM recordings
@@ -527,23 +641,19 @@ def get_project_total_report():
         cursor.execute(sql, (project_id,))
         rows = cursor.fetchall()
 
-        # 轉成以 paragraph_index 為 key 的字典 (1-based)
         recorded_dict = {int(row['paragraph_index']): row for row in rows}
 
-        # 3. 強制跑滿所有的文章段落數 (例如 1 ~ 4 段)
         paragraph_list = []
         total_wer = 0.0
         total_words = 0
         total_errors = 0
 
-        # ── 🚀【新變數宣告】：用來加總流暢度總分並計算平均 ──
         total_npvi = 0.0
         total_varco = 0.0
         recorded_count = 0
 
         for i in range(1, total_paragraphs_count + 1):
             if i in recorded_dict:
-                # ── 代表這段有錄音 ──
                 row = recorded_dict[i]
                 align_report = []
                 if row['alignment_report']:
@@ -555,7 +665,6 @@ def get_project_total_report():
                     except Exception as json_err:
                         print(f"JSON 解析出錯: {json_err}")
 
-                # 🚀 將資料庫撈出來的 npvi 和 varco 倒進各段落物件中，歷史紀錄長條才看得到數值！
                 paragraph_list.append({
                     "paragraph_index": i,
                     "file_path": row['file_path'],
@@ -572,13 +681,11 @@ def get_project_total_report():
                     total_words += int(row['total_words'] or 0)
                     total_errors += int(row['error_count'] or 0)
 
-                    # ── 🚀【實體加總】：累加該段落的流暢度分數 ──
                     total_npvi += float(row['npvi'] or 0.0)
                     total_varco += float(row['varco'] or 0.0)
 
                     recorded_count += 1
             else:
-                # ── 代表這段沒錄音：塞入灰色的未錄音空白結構 ──
                 paragraph_list.append({
                     "paragraph_index": i,
                     "file_path": None,
@@ -590,13 +697,12 @@ def get_project_total_report():
                     "varco": None
                 })
 
-        # 🚀 這裡就是大底座卡片的靈魂核心！把算好的全篇總平均塞進大禮包送回前端
         global_stats = {
             "wer_average": total_wer / recorded_count if recorded_count > 0 else 0,
             "total_words": total_words,
             "total_errors": total_errors,
-            "average_npvi": total_npvi / recorded_count if recorded_count > 0 else 0.0,   # 🎯 對接前端大方塊！
-            "average_varco": total_varco / recorded_count if recorded_count > 0 else 0.0   # 🎯 對接前端大方塊！
+            "average_npvi": total_npvi / recorded_count if recorded_count > 0 else 0.0,
+            "average_varco": total_varco / recorded_count if recorded_count > 0 else 0.0
         }
 
         cursor.close()

@@ -2684,6 +2684,86 @@ function assignItemsToChunks(chunks, alignmentReport) {
 }
 
 /**
+ * 💡 【核心新增】：用真正的逐字時間戳（來自 TextGrid 的 "words" tier）做精準的逐字對齊，
+ *    取代 assignItemsToChunks() 那種「用字數比例去猜」的近似做法。
+ *    因為 wordTimings 裡每一筆本來就對應「一個」真正念出來的字，
+ *    所以分配邏輯簡單很多：依序把 alignment_report 塞進對應的字，
+ *    每遇到一個「真的有念出來的字」(非 Delete) 就換下一個字的時間戳。
+ */
+function assignItemsToWords(wordTimings, alignmentReport) {
+    const sorted = [...(wordTimings || [])].sort((a, b) => (a.xmin || 0) - (b.xmin || 0));
+    if (sorted.length === 0) {
+        return [{ xmin: 0, xmax: 0, label: '', items: alignmentReport || [] }];
+    }
+
+    const buckets = sorted.map(() => []);
+    let idx = 0;
+
+    (alignmentReport || []).forEach(item => {
+        if (idx >= buckets.length) idx = buckets.length - 1;
+        buckets[idx].push(item);
+
+        const hyp = (item.Hypothesis || item.hypothesis || '').trim();
+        const isRealHyp = hyp && hyp !== '—' && hyp !== '–';
+        if (isRealHyp && idx < buckets.length - 1) {
+            idx++;
+        }
+    });
+
+    return sorted.map((w, i) => ({ xmin: w.xmin, xmax: w.xmax, label: w.text, items: buckets[i] }));
+}
+
+/**
+ * 💡 【核心新增】：把逐字對齊後的每一個「字」，對應回它所屬的「句子分段」(NPVI chunk_results) 編號。
+ *    用途：逐字對齊只負責「位置精準」，但顏色分組要維持「以句子為單位」交錯，
+ *    不然每個字都換色，畫面會像彩虹一樣亂。
+ *    做法：用每個字的開始時間 (xmin)，去對應落在哪個句子分段的時間範圍內；
+ *    萬一時間有些微誤差、沒有剛好落在任何分段裡，就找時間上最接近的那個分段。
+ */
+function assignChunkIndices(groupedWords, sortedChunks) {
+    if (!sortedChunks || sortedChunks.length === 0) {
+        return groupedWords.map((w) => ({ ...w, chunkIndex: 0 }));
+    }
+    return groupedWords.map((w) => {
+        const t = w.xmin || 0;
+        let idx = sortedChunks.findIndex(c => t >= (c.xmin || 0) && t < (c.xmax != null ? c.xmax : Infinity));
+        if (idx === -1) {
+            let bestIdx = 0;
+            let bestDist = Infinity;
+            sortedChunks.forEach((c, i) => {
+                const dist = Math.min(Math.abs((c.xmin || 0) - t), Math.abs((c.xmax || 0) - t));
+                if (dist < bestDist) { bestDist = dist; bestIdx = i; }
+            });
+            idx = bestIdx;
+        }
+        return { ...w, chunkIndex: idx };
+    });
+}
+
+/**
+ * 💡 【核心新增】：依指定的「每秒像素」比例，把 grouped 陣列（含 xmin/xmax/chunkIndex/items/label）
+ *    換算成實際要畫在畫面上的 left / width / gapBeforePx。
+ *    這個函式在「第一次建立畫面」跟「使用者拉縮放滑桿」時都會呼叫到，統一用同一套邏輯，
+ *    確保縮放前後排版邏輯一致，不會跑版。
+ */
+function computeLayout(groupedItems, pxPerSec) {
+    let prevXmax = 0;
+    return (groupedItems || []).map((c) => {
+        const duration = Math.max((c.xmax || 0) - (c.xmin || 0), 0.05);
+        const gapBeforeSec = Math.max((c.xmin || 0) - prevXmax, 0);
+        const gapBeforePx = gapBeforeSec * pxPerSec;
+        const left = (c.xmin || 0) * pxPerSec;
+        const width = duration * pxPerSec;
+        prevXmax = c.xmax || 0;
+        return {
+            xmin: c.xmin, xmax: c.xmax, label: c.label,
+            chunkIndex: c.chunkIndex || 0,
+            left, width, gapBeforePx, items: c.items
+        };
+    });
+}
+
+/**
  * 💡 渲染逐段對照的逐字稿列（上：正確課文 / 下：使用者實際發音），
  *    每個 chunk 一塊，跟上方時間軸的顏色一黑一白對應。
  *    targetCategory 有值時，只把該類別的錯誤標紅；null 時全部維持中性色。
@@ -2745,7 +2825,10 @@ function renderChunkTranscriptRow(layout, targetCategory) {
     const normalizedTarget = targetCategory ? (targetCategoryMap[targetCategory] || targetCategory) : null;
 
     return layout.map((c, i) => {
-        const isBlue = i % 2 === 0;
+        // 💡 核心修正：顏色分組改用 chunkIndex（這個字屬於第幾個句子分段），
+        //    不再用逐字本身的陣列位置 i，這樣同一句話裡的每個字會維持同一個顏色，
+        //    只有換到下一句才會切換淺藍/淺綠，不會變成每個字一個顏色的彩虹畫面。
+        const isBlue = (c.chunkIndex || 0) % 2 === 0;
         const bg = isBlue ? '#eff6ff' : '#ecfdf5';       // 淺藍 / 淺綠 交錯
         const refColor = '#1f2937';
         const hypColorDefault = '#6b7280';
@@ -2780,9 +2863,9 @@ function renderChunkTranscriptRow(layout, targetCategory) {
             : '';
 
         return spacerHtml + `
-            <div class="chunk-transcript-block" style="flex: 0 0 ${c.width}px; width:${c.width}px; background:${bg};
+            <div class="chunk-transcript-block" data-word-idx="${i}" style="flex: 0 0 ${c.width}px; width:${c.width}px; background:${bg};
                         display:flex; flex-wrap:nowrap; align-items:flex-start; padding:8px 6px; box-sizing:border-box;
-                        border-right: 3px solid rgba(30,41,59,0.35); overflow:visible;">
+                        border-right: 3px solid rgba(30,41,59,0.35); overflow:visible; transition: box-shadow 0.15s;">
                 ${wordsHtml || '<span style="color:#9ca3af;font-size:0.8rem;">（無內容）</span>'}
             </div>
         `;
@@ -2793,51 +2876,57 @@ function renderChunkTranscriptRow(layout, targetCategory) {
  * 💡 建立完整的「WaveSurfer 波形(疊加一深一淺色塊做分段) + 逐字稿對照 + 篩選按鈕」小工具 HTML。
  *    chunks 直接用 extendedReport.chunk_details（NPVI 回傳的 chunk_results，含 xmin/xmax/label）。
  */
-function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl) {
+function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl, wordTimings) {
     const WORD_SLOT_WIDTH = 50;  // 每個字（含上下兩行）大約需要的寬度
     const MIN_PX_PER_SEC = 60;   // 每秒最少像素，避免音檔很長、字很少時比例被拉得太小
 
-    const grouped = assignItemsToChunks(chunks, alignmentReport);
+    // 💡 核心修改：優先用真正的逐字時間戳（TextGrid words tier）做逐字對齊，
+    //    只有拿不到逐字時間戳的情況（例如同學那邊沒回傳、或退回自己組的備援 TextGrid），
+    //    才退回用 NPVI 的 chunk_results 做「用字數比例分配」的近似對齊。
+    const hasWordTimings = Array.isArray(wordTimings) && wordTimings.length > 0;
+    const sortedChunks = [...(chunks || [])].sort((a, b) => (a.xmin || 0) - (b.xmin || 0));
+
+    let grouped = hasWordTimings
+        ? assignItemsToWords(wordTimings, alignmentReport)
+        : assignItemsToChunks(chunks, alignmentReport);
+
+    // 💡 位置用逐字對齊（精準），顏色分組用句子分段（不要每個字一個顏色）
+    grouped = hasWordTimings
+        ? assignChunkIndices(grouped, sortedChunks)
+        : grouped.map((c, i) => ({ ...c, chunkIndex: i }));
 
     // 💡 先算出每個分段的文字排成「一整排、不換行」實際需要多寬，
     //    再反推「這一段每秒至少要有多少像素」，取全部分段裡最吃緊的那一個，
-    //    當作整個波形統一放大的比例——這樣波形會被拉長到剛好能讓文字都排成一排，
-    //    而不是文字被硬擠到跟波形一樣窄。
-    let pxPerSec = MIN_PX_PER_SEC;
+    //    當作整個波形統一放大的基準比例——這樣波形會被拉長到剛好能讓文字都排成一排，
+    //    而不是文字被硬擠到跟波形一樣窄。這個基準比例對應縮放滑桿的 100%。
+    let basePxPerSec = MIN_PX_PER_SEC;
     grouped.forEach((c) => {
         const duration = Math.max((c.xmax || 0) - (c.xmin || 0), 0.1);
         const wordCount = Math.max((c.items || []).length, 1);
         const neededWidth = wordCount * WORD_SLOT_WIDTH + 20;
         const neededPxPerSec = neededWidth / duration;
-        if (neededPxPerSec > pxPerSec) pxPerSec = neededPxPerSec;
+        if (neededPxPerSec > basePxPerSec) basePxPerSec = neededPxPerSec;
     });
 
-    let prevXmax = 0;
-    const layout = grouped.map((c) => {
-        const duration = Math.max((c.xmax || 0) - (c.xmin || 0), 0.1);
-        // 💡 核心修正：chunk 跟 chunk 之間常常有停頓（靜音），
-        //    這段停頓也要換算成寬度、放進逐字稿排版裡，
-        //    不然逐字稿的色塊會少算這段空白、一路往前擠，
-        //    越後面的分段跟波形上真正的位置就會差越多。
-        const gapBeforeSec = Math.max((c.xmin || 0) - prevXmax, 0);
-        const gapBeforePx = gapBeforeSec * pxPerSec;
-        const left = (c.xmin || 0) * pxPerSec; // 用絕對時間換算位置，保證跟波形對得上
-        const width = duration * pxPerSec;
-        prevXmax = c.xmax || 0;
-        return { xmin: c.xmin, xmax: c.xmax, left, width, gapBeforePx, items: c.items };
-    });
-
+    const layout = computeLayout(grouped, basePxPerSec);
     const transcriptHtml = renderChunkTranscriptRow(layout, null);
+
     const layoutJson = JSON.stringify(layout).replace(/'/g, "&apos;");
-    // 💡 波形上疊加色塊只需要每段的起訖時間，不需要文字內容
-    const chunkTimesJson = JSON.stringify(grouped.map(c => ({ xmin: c.xmin, xmax: c.xmax }))).replace(/'/g, "&apos;");
+    // 💡 存一份「還沒換算成像素位置」的原始分組資料，縮放滑桿拉動時要用這份資料重新計算，
+    //    不能直接拿 layout（那是已經用 basePxPerSec 算好位置的結果）去等比縮放，
+    //    不然每次縮放都會累積誤差。
+    const rawGroupsJson = JSON.stringify(grouped.map(c => ({
+        xmin: c.xmin, xmax: c.xmax, label: c.label, chunkIndex: c.chunkIndex, items: c.items
+    }))).replace(/'/g, "&apos;");
+    // 💡 波形上疊加色塊維持用「句子分段」的起訖時間，跟逐字對齊的位置分開處理
+    const chunkTimesJson = JSON.stringify(sortedChunks.map(c => ({ xmin: c.xmin, xmax: c.xmax }))).replace(/'/g, "&apos;");
 
     // 💡 核心修正：算出一個明確固定的總寬度（像素），直接指定給容器，
     //    不要再用 min-width:100% 這種「跟父層寬度綁定」的寫法——
     //    那種寫法會在「捲軸出現/消失造成可視寬度改變」時，
     //    跟波形實際內容寬度互相牽動，形成版面量測迴圈，畫面就會一直左右跳動。
     const totalDurationSec = layout.length ? Math.max(...layout.map(l => l.xmax || 0)) : 0;
-    const totalWidthPx = Math.max(Math.ceil(totalDurationSec * pxPerSec) + 20, 200);
+    const totalWidthPx = Math.max(Math.ceil(totalDurationSec * basePxPerSec) + 20, 200);
 
     let cleanAudioUrl = rawAudioUrl || '';
     if (cleanAudioUrl && !cleanAudioUrl.startsWith('/') && !cleanAudioUrl.startsWith('http')) cleanAudioUrl = '/' + cleanAudioUrl;
@@ -2845,9 +2934,10 @@ function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl) {
 
     return `
         <div class="chunk-audio-widget" id="${stripId}-chunkwidget"
-             data-layout='${layoutJson}' data-chunks='${chunkTimesJson}' data-audio-url="${cleanAudioUrl}" data-px-per-sec="${pxPerSec}">
+             data-layout='${layoutJson}' data-raw-groups='${rawGroupsJson}' data-chunks='${chunkTimesJson}'
+             data-audio-url="${cleanAudioUrl}" data-base-px-per-sec="${basePxPerSec}" data-active-category="">
             <div style="font-size: 0.9rem; font-weight: bold; color: #475569; margin-bottom: 8px;">
-                🎵 錄音回放（波形上的色塊 = 逐段切分，上下紅線隨播放即時移動）：
+                🎵 錄音回放（顏色 = 逐句分段，逐字精準對齊，上下紅線+高亮隨播放即時移動）：
             </div>
 
             <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom: 10px;">
@@ -2859,6 +2949,14 @@ function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl) {
                 <button class="wer-filter-btn-chunked" onclick="window.switchWerFilterChunked(this, 'substitutions', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Substitutions</button>
                 <button class="wer-filter-btn-chunked" onclick="window.switchWerFilterChunked(this, 'deletions', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Deletions</button>
                 <button class="wer-filter-btn-chunked" onclick="window.switchWerFilterChunked(this, 'insertions', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Insertions</button>
+            </div>
+
+            <div style="display:flex; align-items:center; gap:10px; margin-bottom: 10px; flex-wrap: wrap;">
+                <span style="font-size:0.8rem; color:#64748b; white-space:nowrap;">🔍 縮放：</span>
+                <span style="font-size:0.8rem; color:#64748b;">縮小</span>
+                <input type="range" id="${stripId}-zoom" min="0.2" max="3" step="0.1" value="1" style="flex:1; min-width:120px; max-width:280px;">
+                <span style="font-size:0.8rem; color:#64748b;">放大</span>
+                <span id="${stripId}-zoom-label" style="font-size:0.8rem; color:#475569; font-weight:bold; min-width:40px;">100%</span>
             </div>
 
             <!-- 💡 波形與逐字稿現在共用同一個捲動容器，左右拖曳一次同時帶動兩者。
@@ -2890,6 +2988,9 @@ window.switchWerFilterChunked = function(btn, errorType, stripId) {
     btn.style.background = '#e63946';
     btn.style.color = '#fff';
 
+    // 💡 記住目前選取的篩選類別，縮放滑桿重繪逐字稿列時要保留這個篩選狀態
+    widget.dataset.activeCategory = errorType || '';
+
     let layout = [];
     try { layout = JSON.parse(widget.dataset.layout); } catch (e) { return; }
 
@@ -2910,12 +3011,18 @@ function initChunkedAudioBlock(stripId) {
     const waveformEl = document.getElementById(`${stripId}-waveform`);
     const scrollWrap = document.getElementById(`${stripId}-scrollwrap`);
     const playBtn = document.getElementById(`${stripId}-playbtn`);
+    const zoomSlider = document.getElementById(`${stripId}-zoom`);
+    const zoomLabel = document.getElementById(`${stripId}-zoom-label`);
+    const scrollArea = document.getElementById(`${stripId}-scrollarea`);
+    const transcriptWrap = document.getElementById(`${stripId}-transcript-wrap`);
     if (!widget || !waveformEl) return;
 
     let chunkTimes = [];
     try { chunkTimes = JSON.parse(widget.dataset.chunks); } catch (e) { chunkTimes = []; }
+    let rawGroups = [];
+    try { rawGroups = JSON.parse(widget.dataset.rawGroups); } catch (e) { rawGroups = []; }
     const audioUrl = widget.dataset.audioUrl || '';
-    const pxPerSec = parseFloat(widget.dataset.pxPerSec) || 90;
+    const basePxPerSec = parseFloat(widget.dataset.basePxPerSec) || 90;
 
     if (typeof WaveSurfer === 'undefined') {
         console.warn('⚠️ WaveSurfer 尚未載入，無法顯示波形');
@@ -2938,7 +3045,7 @@ function initChunkedAudioBlock(stripId) {
         barWidth: 3,
         barGap: 2,
         height: 80,
-        minPxPerSec: pxPerSec,   // 💡 跟逐字稿列用同一個動態算出的比例，兩者才能真正對齊
+        minPxPerSec: basePxPerSec,
         autoScroll: false,  // 💡 關掉：這個功能會跟外層我們自己手動控制的捲動容器互相搶控制權，
                              //    導致波形上的色塊左右跳動；改成完全由使用者手動拖曳捲動。
         autoCenter: false,
@@ -2946,7 +3053,8 @@ function initChunkedAudioBlock(stripId) {
     });
     waveformEl._wsInstance = ws;
 
-    // 💡 用 Regions 外掛把淺藍/淺綠交錯的分段色塊直接疊加在波形上
+    // 💡 用 Regions 外掛把淺藍/淺綠交錯的「句子分段」色塊直接疊加在波形上（跟逐字對齊的位置分開處理，
+    //    這裡永遠是句子層級，不會因為逐字對齊而變成一堆碎顏色）。
     //    改綁在 'ready'（完全載入完成才觸發一次），避免 'decode' 在載入過程中
     //    可能觸發不只一次、導致色塊被重複疊加越疊越深、看起來像在閃爍。
     if (WaveSurfer.Regions) {
@@ -2982,28 +3090,76 @@ function initChunkedAudioBlock(stripId) {
         ws.on('finish', () => { playBtn.textContent = '▶ 播放'; });
     }
 
-    // 💡 逐字稿列上方也加一條紅線，跟著播放進度即時移動，
-    //    這樣上面(波形)跟下面(逐字稿)都能看到目前念到哪，不用只看波形自己猜。
+    // 💡 逐字稿列上方的紅線 + 目前正在念的那個字高亮，兩者都跟著播放進度即時更新，
+    //    這樣不管看波形還是看逐字稿，都能清楚知道現在念到哪裡，不用用猜的。
     const transcriptPlayhead = document.getElementById(`${stripId}-transcript-playhead`);
-    let layoutForPlayhead = [];
-    try { layoutForPlayhead = JSON.parse(widget.dataset.layout); } catch (e) { layoutForPlayhead = []; }
+    let currentLayout = [];
+    try { currentLayout = JSON.parse(widget.dataset.layout); } catch (e) { currentLayout = []; }
+    let lastHighlightedIdx = -1;
 
     function timeToTranscriptPixel(t) {
-        for (let i = 0; i < layoutForPlayhead.length; i++) {
-            const c = layoutForPlayhead[i];
+        for (let i = 0; i < currentLayout.length; i++) {
+            const c = currentLayout[i];
             if (t <= c.xmax) {
                 if (t < c.xmin) return c.left;
                 const frac = (t - c.xmin) / Math.max(c.xmax - c.xmin, 0.001);
                 return c.left + frac * c.width;
             }
         }
-        const last = layoutForPlayhead[layoutForPlayhead.length - 1];
+        const last = currentLayout[currentLayout.length - 1];
         return last ? last.left + last.width : 0;
     }
 
-    if (transcriptPlayhead) {
-        ws.on('timeupdate', (currentTime) => {
-            transcriptPlayhead.style.left = timeToTranscriptPixel(currentTime) + 'px';
+    function updateWordHighlight(t) {
+        const transcriptRow = document.getElementById(`${stripId}-transcript`);
+        if (!transcriptRow) return;
+        let idx = -1;
+        for (let i = 0; i < currentLayout.length; i++) {
+            const c = currentLayout[i];
+            if (t >= c.xmin && t < c.xmax) { idx = i; break; }
+        }
+        if (idx === lastHighlightedIdx) return;
+        if (lastHighlightedIdx >= 0) {
+            const prevEl = transcriptRow.querySelector(`[data-word-idx="${lastHighlightedIdx}"]`);
+            if (prevEl) prevEl.style.boxShadow = '';
+        }
+        if (idx >= 0) {
+            const curEl = transcriptRow.querySelector(`[data-word-idx="${idx}"]`);
+            if (curEl) curEl.style.boxShadow = '0 0 0 3px #e63946 inset';
+        }
+        lastHighlightedIdx = idx;
+    }
+
+    ws.on('timeupdate', (currentTime) => {
+        if (transcriptPlayhead) transcriptPlayhead.style.left = timeToTranscriptPixel(currentTime) + 'px';
+        updateWordHighlight(currentTime);
+    });
+
+    // 💡 縮放滑桿：拉動時同時重繪波形（WaveSurfer 內建的 zoom）跟逐字稿列的排版，
+    //    兩邊都用同一個新的「每秒像素」比例重新計算，位置才會繼續對得上。
+    if (zoomSlider) {
+        zoomSlider.addEventListener('input', () => {
+            const factor = parseFloat(zoomSlider.value) || 1;
+            if (zoomLabel) zoomLabel.textContent = Math.round(factor * 100) + '%';
+
+            const newPxPerSec = basePxPerSec * factor;
+
+            try { ws.zoom(newPxPerSec); } catch (e) { console.warn('WaveSurfer 縮放失敗:', e); }
+
+            const newLayout = computeLayout(rawGroups, newPxPerSec);
+            widget.dataset.layout = JSON.stringify(newLayout).replace(/'/g, "&apos;");
+            currentLayout = newLayout;
+            lastHighlightedIdx = -1;
+
+            const activeCategory = widget.dataset.activeCategory || null;
+            const transcriptRow = document.getElementById(`${stripId}-transcript`);
+            if (transcriptRow) transcriptRow.innerHTML = renderChunkTranscriptRow(newLayout, activeCategory || null);
+
+            const totalDurationSec = newLayout.length ? Math.max(...newLayout.map(l => l.xmax || 0)) : 0;
+            const newTotalWidthPx = Math.max(Math.ceil(totalDurationSec * newPxPerSec) + 20, 200);
+            if (scrollArea) scrollArea.style.width = newTotalWidthPx + 'px';
+            if (waveformEl) waveformEl.style.width = newTotalWidthPx + 'px';
+            if (transcriptWrap) transcriptWrap.style.width = newTotalWidthPx + 'px';
         });
     }
 
@@ -3194,9 +3350,10 @@ function renderMultipleParagraphsReport(paragraphList, globalStats, mode = 'segm
                     </div>
                 `;
 
-                // 🎵 區塊 2：分色分段音檔對照小工具（時間軸一黑一白分段 + 逐段對照逐字稿 + 錯誤篩選）
+                // 🎵 區塊 2：分色分段音檔對照小工具（優先用逐字時間戳做真正的逐字對齊）
                 const chunkListForWidget = extendedReport.chunk_details || [];
-                const chunkedAudioHTML = buildChunkedAudioBlock(stripId, chunkListForWidget, alignments, para.file_path || '');
+                const wordTimingsForWidget = extendedReport.word_timings || [];
+                const chunkedAudioHTML = buildChunkedAudioBlock(stripId, chunkListForWidget, alignments, para.file_path || '', wordTimingsForWidget);
 
                 body.innerHTML = chartsHTML + chunkedAudioHTML;
 
