@@ -79,340 +79,6 @@ window.switchWerFilter = function(btn, errorType, stripId) {
     }
 };
 
-// ==================== 2. 單段落即時分析器 ====================
-function renderWerReportToPanel3(alignmentReport, stats, currentParaNum = 1, backendAudioUrl = '') {
-    try {
-        if (document.getElementById('werScoreText')) document.getElementById('werScoreText').innerText = (stats.wer_repair_fluency * 100).toFixed(1) + '%';
-        if (document.getElementById('werTotalWords')) document.getElementById('werTotalWords').innerText = stats.total_ref_words;
-
-        const container = document.getElementById('werParagraphsContainer');
-        if (!container) return;
-
-        if (container.querySelector('p') || container.innerText.includes('暫無分析資料')) container.innerHTML = '';
-        const oldStrip = container.querySelector(`[data-strip-para="${currentParaNum}"]`);
-        if (oldStrip) oldStrip.remove();
-
-        const stripId = `strip-para-${currentParaNum}-${Date.now()}`;
-        const strip = document.createElement('div');
-        strip.id = stripId;
-        strip.style.background = '#fff';
-        strip.style.border = '1px solid #e2e8f0';
-        strip.style.borderRadius = '12px';
-        strip.style.overflow = 'hidden';
-        strip.style.boxShadow = '0 2px 6px rgba(0,0,0,0.01)';
-        strip.style.width = '100%';
-        strip.style.boxSizing = 'border-box';
-        strip.setAttribute('data-strip-para', currentParaNum);
-
-        if (alignmentReport && alignmentReport.length > 0) {
-            strip.setAttribute('data-alignment', JSON.stringify(alignmentReport).replace(/'/g, "&apos;"));
-        }
-
-        const header = document.createElement('div');
-        header.style.cssText = `padding: 18px 24px; background: #f8fafc; display: flex; align-items: center; justify-content: space-between; cursor: pointer;`;
-        
-        let errorCount = alignmentReport ? alignmentReport.filter(i => i.Category !== 'Match' && i.category !== 'Match').length : 0;
-        const displayNpvi = (stats.npvi != null) ? parseFloat(stats.npvi).toFixed(2) : '—';
-        const displayVarco = (stats.varco != null) ? parseFloat(stats.varco).toFixed(2) : '—';
-
-        header.innerHTML = `
-            <div style="display: flex; align-items: center; gap: 30px; flex: 1; flex-wrap: wrap;">
-                <span style="font-weight: bold; color: #1f2937; min-width: 65px; font-size: 1.05rem;">段落 ${currentParaNum}</span>
-                <span style="color: #16a34a; font-weight: bold; background: #dcfce7; padding: 4px 12px; border-radius: 8px; font-size: 0.85rem;">✓ 已錄音</span>
-                <div style="display: flex; gap: 24px; color: #4a5568; font-size: 0.92rem; align-items: center; flex-wrap: wrap;">
-                    <div>WER: <strong style="color: #e63946; font-size: 1.05rem;">${(stats.wer_repair_fluency * 100).toFixed(1)}%</strong></div>
-                    <div>錯誤數: <strong style="color: #fb923c; font-size: 1.05rem;">${errorCount}</strong></div>
-                    <div style="color: #4a5568; border-left: 1px solid #e2e8f0; padding-left: 16px;">nPVI: <strong style="color: #2563eb; font-size: 1.05rem;">${displayNpvi}</strong></div>
-                    <div style="color: #4a5568;">Varco: <strong style="color: #10b981; font-size: 1.05rem;">${displayVarco}</strong></div>
-                </div>
-            </div>
-            <div style="display: flex; align-items: center; gap: 8px;">
-                <span style="color: #a0aec0; font-size: 0.85rem;">展開對照</span> <span class="arrow-icon" style="transition: transform 0.2s; color: #cbd5e1;">▼</span>
-            </div>
-        `;
-
-        const body = document.createElement('div');
-        body.style.cssText = 'padding: 24px; display: none; background: #ffffff; border-top: 1px solid #edf2f7; flex-direction: column; gap: 24px;';
-
-        const counts = [
-            stats.repair_repetition || 0, stats.repair_attempt || 0, stats.repair_restart || 0,
-            stats.substitutions || 0, stats.deletions || 0, stats.insertions || 0
-        ];
-
-        let cleanAudioUrl = backendAudioUrl || '';
-        if (cleanAudioUrl && !cleanAudioUrl.startsWith('/') && !cleanAudioUrl.startsWith('http')) cleanAudioUrl = '/' + cleanAudioUrl;
-        if (cleanAudioUrl) cleanAudioUrl += (cleanAudioUrl.includes('?') ? '&' : '?') + 't=' + Date.now();
-
-        // 🚀 注意看這裡！按鈕的 onClick 已經加上 ${currentParaNum}，這樣 JavaScript 才知道去哪裡抓這一段的原始文章！
-        body.innerHTML = `
-            <div style="display: flex; gap: 24px; width: 100%; flex-wrap: wrap;">
-                <div style="flex: 1; min-width: 300px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; align-items: center;">
-                    <div style="font-size: 0.95rem; font-weight: bold; color: #475569; margin-bottom: 12px; align-self: flex-start;">🕸️ 發音錯誤面向分析</div>
-                    <div style="position: relative; width: 100%; height: 220px;"><canvas class="radar-canvas"></canvas></div>
-                </div>
-                <div style="flex: 1; min-width: 300px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; justify-content: center; gap: 20px;">
-                    <div style="font-size: 0.95rem; font-weight: bold; color: #475569; margin-bottom: 4px;">🎯 流暢度達標分析 (Bullet Chart)</div>
-                    <div>
-                        <div style="display: flex; justify-content: space-between; font-size: 0.85rem; font-weight: bold; color: #333; margin-bottom: 6px;"><span>nPVI 節奏指數</span><span>實測: <span style="color: #2563eb;">${parseFloat(displayNpvi)||0}</span> / 標準: 50</span></div>
-                        <div style="position: relative; width: 100%; height: 24px; background: #e2e8f0; border-radius: 12px; overflow: hidden;"><div style="width: ${Math.min(((parseFloat(displayNpvi)||0) / 50) * 80, 100)}%; height: 100%; background: #3b82f6; transition: width 1s;"></div><div style="position: absolute; left: 80%; top: 0; bottom: 0; width: 4px; background: #e63946;"></div></div>
-                    </div>
-                    <div>
-                        <div style="display: flex; justify-content: space-between; font-size: 0.85rem; font-weight: bold; color: #333; margin-bottom: 6px;"><span>Varco 語速變異</span><span>實測: <span style="color: #10b981;">${parseFloat(displayVarco)||0}</span> / 標準: 45</span></div>
-                        <div style="position: relative; width: 100%; height: 24px; background: #e2e8f0; border-radius: 12px; overflow: hidden;"><div style="width: ${Math.min(((parseFloat(displayVarco)||0) / 45) * 80, 100)}%; height: 100%; background: #10b981; transition: width 1s;"></div><div style="position: absolute; left: 80%; top: 0; bottom: 0; width: 4px; background: #e63946;"></div></div>
-                    </div>
-                </div>
-            </div>
-            <div style="background: #f1f5f9; border: 1px solid #cbd5e1; padding: 12px 18px; border-radius: 8px;">
-                <div style="font-size: 0.9rem; font-weight: bold; color: #475569; margin-bottom: 8px;">🎵 錄音回放 (WAV)：</div>
-                <audio src="${cleanAudioUrl}" controls style="width: 100%; height: 36px;" preload="metadata"></audio>
-            </div>
-            <div style="display: flex; flex-direction: column; gap: 12px;">
-                <div style="font-size: 0.9rem; font-weight: bold; color: #475569;">🔍 點擊錯誤類別，查看發生在哪個單字：</div>
-                <div style="display: flex; flex-wrap: wrap; gap: 8px;">
-                    <button class="wer-filter-btn" onclick="window.switchWerFilter(this, 'repair_repetition', '${stripId}', ${currentParaNum})" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Repetition</button>
-                    <button class="wer-filter-btn" onclick="window.switchWerFilter(this, 'repair_attempt', '${stripId}', ${currentParaNum})" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Attempt</button>
-                    <button class="wer-filter-btn" onclick="window.switchWerFilter(this, 'repair_restart', '${stripId}', ${currentParaNum})" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Restart</button>
-                    <button class="wer-filter-btn" onclick="window.switchWerFilter(this, 'substitutions', '${stripId}', ${currentParaNum})" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Substitutions</button>
-                    <button class="wer-filter-btn" onclick="window.switchWerFilter(this, 'deletions', '${stripId}', ${currentParaNum})" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Deletions</button>
-                    <button class="wer-filter-btn" onclick="window.switchWerFilter(this, 'insertions', '${stripId}', ${currentParaNum})" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Insertions</button>
-                </div>
-                <div class="transcript-display-area" style="margin-top: 8px;">
-                    <div style="text-align: center; color: #94a3b8; font-size: 0.95rem; padding: 20px; background: #f8fafc; border-radius: 8px; border: 1px dashed #cbd5e1;">
-                        請點擊上方的分類按鈕，以顯示逐字稿與標記紅字。
-                    </div>
-                </div>
-            </div>
-        `;
-
-        header.addEventListener('click', () => {
-            const isHidden = body.style.display === 'none';
-            body.style.display = isHidden ? 'flex' : 'none';
-            header.querySelector('.arrow-icon').style.transform = isHidden ? 'rotate(180deg)' : 'rotate(0deg)';
-            header.style.background = isHidden ? '#f1f5f9' : '#f8fafc';
-
-            if (isHidden && !body.dataset.chartRendered) {
-                body.dataset.chartRendered = 'true';
-                const canvas = body.querySelector('.radar-canvas');
-                if (canvas) {
-                    new Chart(canvas.getContext('2d'), {
-                        type: 'radar',
-                        data: {
-                            labels: ['Repetition', 'Attempt', 'Restart', 'Substitutions', 'Deletions', 'Insertions'],
-                            datasets: [{ label: '發生次數', data: counts, backgroundColor: 'rgba(230, 57, 70, 0.2)', borderColor: '#e63946', pointBackgroundColor: '#e63946', borderWidth: 2 }]
-                        },
-                        options: { responsive: true, maintainAspectRatio: false, scales: { r: { beginAtZero: true, ticks: { stepSize: 1, backdropColor: 'transparent' }, pointLabels: { font: { size: 11, weight: 'bold' }, color: '#475569' } } }, plugins: { legend: { display: false } } }
-                    });
-                }
-            }
-        });
-
-        strip.appendChild(header);
-        strip.appendChild(body);
-        container.appendChild(strip);
-    } catch (err) { console.error("❌ 即時渲染失敗：", err); }
-}
-
-// ==================== 3. 歷史大禮包總成 ====================
-function renderMultipleParagraphsReport(paragraphList, globalStats, mode = 'segment') {
-    try {
-        const isWhole = mode === 'whole';
-
-        // 💡 whole 模式：只有 paragraph_index = 0 是真正的整篇錄音，
-        //    其他段落條目只是分段練習殘留的佔位資料，直接忽略、不參與平均。
-        let effectiveList = paragraphList;
-        let effectiveGlobalStats = globalStats;
-
-        if (isWhole) {
-            const wholeEntry = (paragraphList || []).find(
-                p => p.paragraph_index === 0 && p.file_path !== null && p.wer !== null
-            );
-
-            effectiveList = wholeEntry ? [wholeEntry] : [];
-
-            // 💡 整篇模式已經是「單一完整結果」，不用再平均，直接拿它自己的數值當總體看板
-            effectiveGlobalStats = wholeEntry ? {
-                wer_average: wholeEntry.wer,
-                total_words: wholeEntry.total_ref_words ?? (globalStats ? globalStats.total_words : 0),
-                total_errors: wholeEntry.error_count,
-                average_npvi: wholeEntry.npvi,
-                average_varco: wholeEntry.varco
-            } : null;
-        }
-
-        if (document.getElementById('werScoreText')) {
-            document.getElementById('werScoreText').innerText =
-                effectiveGlobalStats ? (effectiveGlobalStats.wer_average * 100).toFixed(1) + '%' : '0.0%';
-        }
-        if (document.getElementById('werTotalWords')) {
-            document.getElementById('werTotalWords').innerText =
-                effectiveGlobalStats ? effectiveGlobalStats.total_words : '0';
-        }
-        if (document.getElementById('werErrorCount')) {
-            document.getElementById('werErrorCount').innerText =
-                effectiveGlobalStats ? effectiveGlobalStats.total_errors : '0';
-        }
-        if (document.getElementById('werAvgNpvi')) {
-            document.getElementById('werAvgNpvi').innerText =
-                (effectiveGlobalStats && effectiveGlobalStats.average_npvi != null)
-                    ? parseFloat(effectiveGlobalStats.average_npvi).toFixed(2) : '0.00';
-        }
-        if (document.getElementById('werAvgVarco')) {
-            document.getElementById('werAvgVarco').innerText =
-                (effectiveGlobalStats && effectiveGlobalStats.average_varco != null)
-                    ? parseFloat(effectiveGlobalStats.average_varco).toFixed(2) : '0.00';
-        }
-
-        // 💡 順手把標題文字也改一下，whole 模式不叫「Total 平均」
-        const bannerTitle = document.getElementById('scoreBannerTitle');
-        if (bannerTitle) {
-            bannerTitle.innerHTML = isWhole
-                ? '📊 整篇朗讀流暢度結算看板'
-                : '📊 總體朗讀流暢度結算看板 (Total 平均)';
-        }
-
-        const container = document.getElementById('werParagraphsContainer');
-        if (!container) return;
-        container.innerHTML = '';
-
-        if (isWhole && effectiveList.length === 0) {
-            container.innerHTML = `
-                <div style="background: #fff; border: 1px solid #e2e8f0; padding: 40px; border-radius: 12px; text-align: center; width: 100%; box-sizing: border-box;">
-                    <p style="color: #999; margin: 0; font-size: 0.95rem;">暫無整篇錄音分析資料。</p>
-                </div>`;
-            return;
-        }
-
-        paragraphList.forEach((para) => {
-            const hasRecorded = para.file_path !== null && para.wer !== null;
-            const stripId = `strip-para-${para.paragraph_index}-${Date.now()}`;
-
-            let extendedReport = {};
-            if (para.alignment_report) {
-                if (typeof para.alignment_report === 'string') {
-                    try { extendedReport = JSON.parse(para.alignment_report); } catch(e) {}
-                } else { extendedReport = para.alignment_report; }
-            }
-
-            const strip = document.createElement('div');
-            strip.id = stripId;
-            strip.style.cssText = 'background:#fff; border:1px solid #e2e8f0; border-radius:12px; overflow:hidden; box-shadow:0 2px 6px rgba(0,0,0,0.01); width:100%; box-sizing:border-box; margin-bottom:8px;';
-
-            const alignments = extendedReport.word_alignments || [];
-            if (hasRecorded && alignments.length > 0) {
-                strip.setAttribute('data-alignment', JSON.stringify(alignments).replace(/'/g, "&apos;"));
-            }
-
-            const singleParaNpvi = (hasRecorded && para.npvi != null) ? parseFloat(para.npvi).toFixed(2) : '—';
-            const singleParaVarco = (hasRecorded && para.varco != null) ? parseFloat(para.varco).toFixed(2) : '—';
-            const statusBadge = hasRecorded 
-                ? `<span style="color: #16a34a; font-weight: bold; background: #dcfce7; padding: 4px 12px; border-radius: 8px; font-size: 0.85rem;">✓ 已錄音</span>` 
-                : `<span style="color: #64748b; font-weight: bold; background: #f1f5f9; padding: 4px 12px; border-radius: 8px; font-size: 0.85rem;">✕ 未錄音</span>`;
-
-            const header = document.createElement('div');
-            header.style.cssText = `padding: 18px 24px; background: ${hasRecorded ? '#f8fafc' : '#fcfcfc'}; display: flex; align-items: center; justify-content: space-between; cursor: ${hasRecorded ? 'pointer' : 'not-allowed'}; opacity: ${hasRecorded ? '1' : '0.65'};`;
-            header.innerHTML = `
-                <div style="display: flex; align-items: center; gap: 30px; flex: 1; flex-wrap: wrap;">
-                    <span style="font-weight: bold; color: #1f2937; min-width: 65px; font-size: 1.05rem;">段落 ${para.paragraph_index}</span>
-                    ${statusBadge}
-                    <div style="display: flex; gap: 24px; color: #4a5568; font-size: 0.92rem; align-items: center; flex-wrap: wrap;">
-                        <div>WER: <strong style="color: #e63946; font-size: 1.05rem;">${hasRecorded ? (para.wer * 100).toFixed(1) + '%' : '—'}</strong></div>
-                        <div>錯誤數: <strong style="color: #fb923c; font-size: 1.05rem;">${hasRecorded ? para.error_count : '—'}</strong></div>
-                        <div style="color: #4a5568; border-left: 1px solid #e2e8f0; padding-left: 16px;">nPVI: <strong style="color: #2563eb; font-size: 1.05rem;">${singleParaNpvi}</strong></div>
-                        <div style="color: #4a5568;">Varco: <strong style="color: #10b981; font-size: 1.05rem;">${singleParaVarco}</strong></div>
-                    </div>
-                </div>
-                <div style="display: flex; align-items: center; gap: 8px;">
-                    ${hasRecorded ? '<span style="color: #a0aec0; font-size: 0.85rem;">展開對照</span> <span class="arrow-icon" style="transition: transform 0.2s; color: #cbd5e1;">▼</span>' : ''}
-                </div>
-            `;
-
-            const body = document.createElement('div');
-            body.style.cssText = 'padding: 24px; display: none; background: #ffffff; border-top: 1px solid #edf2f7; flex-direction: column; gap: 24px;';
-
-            if (hasRecorded) {
-                const rawWer = extendedReport.raw_wer_output || {};
-                const stats = rawWer.statistics || {}; 
-                const counts = [
-                    stats.repair_repetition || 0, stats.repair_attempt || 0, stats.repair_restart || 0,
-                    stats.substitutions || 0, stats.deletions || 0, stats.insertions || 0
-                ];
-
-                let cleanAudioUrl = para.file_path || '';
-                if (cleanAudioUrl && !cleanAudioUrl.startsWith('/') && !cleanAudioUrl.startsWith('http')) cleanAudioUrl = '/' + cleanAudioUrl;
-                if (cleanAudioUrl) cleanAudioUrl += (cleanAudioUrl.includes('?') ? '&' : '?') + 't=' + Date.now();
-
-                // 🚀 這裡的按鈕同樣加上了 ${para.paragraph_index}
-                body.innerHTML = `
-                    <div style="display: flex; gap: 24px; width: 100%; flex-wrap: wrap;">
-                        <div style="flex: 1; min-width: 300px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; align-items: center;">
-                            <div style="font-size: 0.95rem; font-weight: bold; color: #475569; margin-bottom: 12px; align-self: flex-start;">🕸️ 發音錯誤面向分析</div>
-                            <div style="position: relative; width: 100%; height: 220px;"><canvas class="radar-canvas"></canvas></div>
-                        </div>
-                        <div style="flex: 1; min-width: 300px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; justify-content: center; gap: 20px;">
-                            <div style="font-size: 0.95rem; font-weight: bold; color: #475569; margin-bottom: 4px;">🎯 流暢度達標分析 (Bullet Chart)</div>
-                            <div>
-                                <div style="display: flex; justify-content: space-between; font-size: 0.85rem; font-weight: bold; color: #333; margin-bottom: 6px;"><span>nPVI 節奏指數</span><span>實測: <span style="color: #2563eb;">${parseFloat(singleParaNpvi)||0}</span> / 標準: 50</span></div>
-                                <div style="position: relative; width: 100%; height: 24px; background: #e2e8f0; border-radius: 12px; overflow: hidden;"><div style="width: ${Math.min(((parseFloat(singleParaNpvi)||0) / 50) * 80, 100)}%; height: 100%; background: #3b82f6; transition: width 1s;"></div><div style="position: absolute; left: 80%; top: 0; bottom: 0; width: 4px; background: #e63946;"></div></div>
-                            </div>
-                            <div>
-                                <div style="display: flex; justify-content: space-between; font-size: 0.85rem; font-weight: bold; color: #333; margin-bottom: 6px;"><span>Varco 語速變異</span><span>實測: <span style="color: #10b981;">${parseFloat(singleParaVarco)||0}</span> / 標準: 45</span></div>
-                                <div style="position: relative; width: 100%; height: 24px; background: #e2e8f0; border-radius: 12px; overflow: hidden;"><div style="width: ${Math.min(((parseFloat(singleParaVarco)||0) / 45) * 80, 100)}%; height: 100%; background: #10b981; transition: width 1s;"></div><div style="position: absolute; left: 80%; top: 0; bottom: 0; width: 4px; background: #e63946;"></div></div>
-                            </div>
-                        </div>
-                    </div>
-                    <div style="background: #f1f5f9; border: 1px solid #cbd5e1; padding: 12px 18px; border-radius: 8px;">
-                        <div style="font-size: 0.9rem; font-weight: bold; color: #475569; margin-bottom: 8px;">🎵 錄音回放 (WAV)：</div>
-                        <audio src="${cleanAudioUrl}" controls style="width: 100%; height: 36px;" preload="metadata"></audio>
-                    </div>
-                    <div style="display: flex; flex-direction: column; gap: 12px;">
-                        <div style="font-size: 0.9rem; font-weight: bold; color: #475569;">🔍 點擊錯誤類別，查看發生在哪個單字：</div>
-                        <div style="display: flex; flex-wrap: wrap; gap: 8px;">
-                            <button class="wer-filter-btn" onclick="window.switchWerFilter(this, 'repair_repetition', '${stripId}', ${para.paragraph_index})" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Repetition</button>
-                            <button class="wer-filter-btn" onclick="window.switchWerFilter(this, 'repair_attempt', '${stripId}', ${para.paragraph_index})" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Attempt</button>
-                            <button class="wer-filter-btn" onclick="window.switchWerFilter(this, 'repair_restart', '${stripId}', ${para.paragraph_index})" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Restart</button>
-                            <button class="wer-filter-btn" onclick="window.switchWerFilter(this, 'substitutions', '${stripId}', ${para.paragraph_index})" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Substitutions</button>
-                            <button class="wer-filter-btn" onclick="window.switchWerFilter(this, 'deletions', '${stripId}', ${para.paragraph_index})" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Deletions</button>
-                            <button class="wer-filter-btn" onclick="window.switchWerFilter(this, 'insertions', '${stripId}', ${para.paragraph_index})" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Insertions</button>
-                        </div>
-                        <div class="transcript-display-area" style="margin-top: 8px;">
-                            <div style="text-align: center; color: #94a3b8; font-size: 0.95rem; padding: 20px; background: #f8fafc; border-radius: 8px; border: 1px dashed #cbd5e1;">
-                                請點擊上方的分類按鈕，以顯示逐字稿與標記紅字。
-                            </div>
-                        </div>
-                    </div>
-                `;
-
-                header.addEventListener('click', () => {
-                    const isHidden = body.style.display === 'none';
-                    body.style.display = isHidden ? 'flex' : 'none';
-                    header.querySelector('.arrow-icon').style.transform = isHidden ? 'rotate(180deg)' : 'rotate(0deg)';
-                    header.style.background = isHidden ? '#f1f5f9' : '#f8fafc';
-
-                    if (isHidden && !body.dataset.chartRendered) {
-                        body.dataset.chartRendered = 'true';
-                        const canvas = body.querySelector('.radar-canvas');
-                        if (canvas) {
-                            new Chart(canvas.getContext('2d'), {
-                                type: 'radar',
-                                data: {
-                                    labels: ['Repetition', 'Attempt', 'Restart', 'Substitutions', 'Deletions', 'Insertions'],
-                                    datasets: [{ label: '發生次數', data: counts, backgroundColor: 'rgba(230, 57, 70, 0.2)', borderColor: '#e63946', pointBackgroundColor: '#e63946', borderWidth: 2 }]
-                                },
-                                options: { responsive: true, maintainAspectRatio: false, scales: { r: { beginAtZero: true, ticks: { stepSize: 1, backdropColor: 'transparent' }, pointLabels: { font: { size: 11, weight: 'bold' }, color: '#475569' } } }, plugins: { legend: { display: false } } }
-                            });
-                        }
-                    }
-                });
-            }
-
-            strip.appendChild(header);
-            strip.appendChild(body);
-            container.appendChild(strip);
-        });
-
-    } catch (err) { console.error("❌ 渲染歷史大禮包失敗:", err); }
-}
-
 console.log('[main.js v3] ✓ 已載入');
 
 function toggleSidebar() {
@@ -1718,7 +1384,20 @@ async function uploadAudio() {
                 : state.currentParagraph >= (state.article.paragraphs.length - 1);
             if (isLast) {
                 showToast('全部錄音完成！快來看看 AI 流暢度分析報告吧 🎉');
-                if (typeof settleAndShowReport === 'function') {
+
+                if (state.practiceMode === 'whole' && result.wer_result && result.wer_result.statistics) {
+                    // 💡 整篇模式：不要再呼叫 settleAndShowReport() 去後端 /get_project_total_report 抓「平均」，
+                    //    那支 API 目前無法正確辨識整篇錄音這一筆資料，算出來的平均永遠是 0。
+                    //    這裡直接拿這次上傳完成、後端即時回傳的分析結果寫進總成績卡，不經過任何平均計算。
+                    state.completedSteps.add(2);
+                    state.currentStep = 2;
+                    updateStepUI();
+                    renderWholeReportDirectly(
+                        result.wer_result.statistics,
+                        result.wer_result.alignment_report,
+                        result.url
+                    );
+                } else if (typeof settleAndShowReport === 'function') {
                     await settleAndShowReport();
                 } else {
                     state.completedSteps.add(2);
@@ -2342,12 +2021,6 @@ function initWaveform() {
     });
 }
 
-// 💡 以下這整段（原本的頂層 state.mediaRecorder.onstop / 重複的 addProjectBtn 綁定 /
-//    重複的 window click 監聽）是舊版遺留、與現有 startRecordingSegment() 邏輯重複且
-//    參照了不存在的 stream 變數的失效程式碼，會在頁面上沒有 addProjectBtn 元素時直接
-//    拋出例外、讓「這行之後」的所有頂層程式碼整個停擺。上面已經用防禦性寫法重新綁定過
-//    一次同樣的功能，這裡整段移除，不影響任何現有功能。
-
 // ── TTS 朗讀功能 ──
 function initTTS() {
     const ttsBtn = document.getElementById('ttsBtn');
@@ -2609,17 +2282,6 @@ function removeWordMask() {
     });
 }
 
-/**
- * 💡 將同學後端回傳的 WER 資料與劃線，漂亮地渲染到 Step 3 區塊中
- */
-// ══════════════════════════════════════════════════
-//  📊 SCORE REPORT RENDERING ENGINE (Step 3 核心綜合渲染引擎)
-// ══════════════════════════════════════════════════
-
-/**
- * 💡 1. 單段落即時分析器：在 Step 2 錄音練習時，每錄完一個單段點擊「上傳並繼續」時觸發。
- * 職責：只在 container 內部精準寻找 data-strip-para="${currentParaNum}" 的對應元素做局部替換，絕不胡亂 append 造成大合併！
- */
 // ══════════════════════════════════════════════════
 //  📊 SCORE REPORT RENDERING ENGINE (真·四段分立、流暢度大波動完全體)
 // ══════════════════════════════════════════════════
@@ -2821,31 +2483,623 @@ function renderWerReportToPanel3(alignmentReport, stats, currentParaNum = 1, bac
 
 
 // ══════════════════════════════════════════════════
+//  📊 整篇練習模式專用：直接寫入總成績卡（不經平均計算）
+// ══════════════════════════════════════════════════
+/**
+ * 💡 整篇練習(whole)剛完成上傳、拿到後端「這一次上傳」的即時分析結果(result.wer_result)時呼叫。
+ *    直接把 stats 裡的數值寫進總成績卡（werScoreText / werTotalWords / werErrorCount /
+ *    werAvgNpvi / werAvgVarco），完全不經過 /get_project_total_report 的後端平均計算 —
+ *    因為那支 API 目前無法正確辨識整篇錄音這一筆資料，算出來的平均值永遠是 0。
+ *    下方段落列表也只會渲染這一筆「整篇朗讀」的手風琴卡，不會有其他段落殘影。
+ */
+function renderWholeReportDirectly(stats, alignmentReport, backendAudioUrl) {
+    try {
+        stats = stats || {};
+        alignmentReport = alignmentReport || [];
+
+        const errorCount = alignmentReport.length > 0
+            ? alignmentReport.filter(i => (i.Category || i.category) !== 'Match').length
+            : ((stats.repair_repetition || 0) + (stats.repair_attempt || 0) + (stats.repair_restart || 0) +
+               (stats.substitutions || 0) + (stats.deletions || 0) + (stats.insertions || 0));
+
+        const werPct = ((stats.wer_repair_fluency || 0) * 100).toFixed(1) + '%';
+        const totalWords = stats.total_ref_words ?? 0;
+        const npvi = (stats.npvi != null) ? parseFloat(stats.npvi).toFixed(2) : '0.00';
+        const varco = (stats.varco != null) ? parseFloat(stats.varco).toFixed(2) : '0.00';
+
+        // 1. 直接改寫總成績卡的五個數字，不做任何平均運算
+        if (document.getElementById('werScoreText')) document.getElementById('werScoreText').innerText = werPct;
+        if (document.getElementById('werTotalWords')) document.getElementById('werTotalWords').innerText = totalWords;
+        if (document.getElementById('werErrorCount')) document.getElementById('werErrorCount').innerText = errorCount;
+        if (document.getElementById('werAvgNpvi')) document.getElementById('werAvgNpvi').innerText = npvi;
+        if (document.getElementById('werAvgVarco')) document.getElementById('werAvgVarco').innerText = varco;
+
+        const bannerTitle = document.getElementById('scoreBannerTitle');
+        if (bannerTitle) bannerTitle.innerHTML = '📊 整篇朗讀流暢度結算看板';
+
+        // 2. 下方只畫「整篇朗讀」這一張手風琴卡
+        const container = document.getElementById('werParagraphsContainer');
+        if (!container) return;
+        container.innerHTML = '';
+
+        const stripId = `strip-whole-${Date.now()}`;
+        const counts = [
+            stats.repair_repetition || 0, stats.repair_attempt || 0, stats.repair_restart || 0,
+            stats.substitutions || 0, stats.deletions || 0, stats.insertions || 0
+        ];
+
+        const strip = document.createElement('div');
+        strip.id = stripId;
+        strip.style.cssText = 'background:#fff; border:1px solid #e2e8f0; border-radius:12px; overflow:hidden; box-shadow:0 2px 6px rgba(0,0,0,0.01); width:100%; box-sizing:border-box; margin-bottom:8px;';
+
+        if (alignmentReport.length > 0) {
+            strip.setAttribute('data-alignment', JSON.stringify(alignmentReport).replace(/'/g, "&apos;"));
+        }
+
+        const header = document.createElement('div');
+        header.style.cssText = 'padding: 18px 24px; background: #f8fafc; display: flex; align-items: center; justify-content: space-between; cursor: pointer;';
+        header.innerHTML = `
+            <div style="display: flex; align-items: center; gap: 30px; flex: 1; flex-wrap: wrap;">
+                <span style="font-weight: bold; color: #1f2937; min-width: 65px; font-size: 1.05rem;">整篇朗讀</span>
+                <span style="color: #16a34a; font-weight: bold; background: #dcfce7; padding: 4px 12px; border-radius: 8px; font-size: 0.85rem;">✓ 已錄音</span>
+                <div style="display: flex; gap: 24px; color: #4a5568; font-size: 0.92rem; align-items: center; flex-wrap: wrap;">
+                    <div>WER: <strong style="color: #e63946; font-size: 1.05rem;">${werPct}</strong></div>
+                    <div>錯誤數: <strong style="color: #fb923c; font-size: 1.05rem;">${errorCount}</strong></div>
+                    <div style="color: #4a5568; border-left: 1px solid #e2e8f0; padding-left: 16px;">nPVI: <strong style="color: #2563eb; font-size: 1.05rem;">${npvi}</strong></div>
+                    <div style="color: #4a5568;">Varco: <strong style="color: #10b981; font-size: 1.05rem;">${varco}</strong></div>
+                </div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="color: #a0aec0; font-size: 0.85rem;">展開對照</span> <span class="arrow-icon" style="transition: transform 0.2s; color: #cbd5e1;">▼</span>
+            </div>
+        `;
+
+        const body = document.createElement('div');
+        body.style.cssText = 'padding: 24px; display: none; background: #ffffff; border-top: 1px solid #edf2f7; flex-direction: column; gap: 24px;';
+
+        let cleanAudioUrl = backendAudioUrl || '';
+        if (cleanAudioUrl && !cleanAudioUrl.startsWith('/') && !cleanAudioUrl.startsWith('http')) cleanAudioUrl = '/' + cleanAudioUrl;
+        if (cleanAudioUrl) cleanAudioUrl += (cleanAudioUrl.includes('?') ? '&' : '?') + 't=' + Date.now();
+
+        body.innerHTML = `
+            <div style="display: flex; gap: 24px; width: 100%; flex-wrap: wrap;">
+                <div style="flex: 1; min-width: 300px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; align-items: center;">
+                    <div style="font-size: 0.95rem; font-weight: bold; color: #475569; margin-bottom: 12px; align-self: flex-start;">🕸️ 發音錯誤面向分析</div>
+                    <div style="position: relative; width: 100%; height: 220px;"><canvas class="radar-canvas"></canvas></div>
+                </div>
+                <div style="flex: 1; min-width: 300px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; justify-content: center; gap: 20px;">
+                    <div style="font-size: 0.95rem; font-weight: bold; color: #475569; margin-bottom: 4px;">🎯 流暢度達標分析 (Bullet Chart)</div>
+                    ${renderFluencyBulletBar('nPVI 節奏指數', parseFloat(npvi) || 0, NPVI_SYL_MEAN, NPVI_SYL_STD, '#3b82f6')}
+                    ${renderFluencyBulletBar('Varco 語速變異', parseFloat(varco) || 0, VARCO_SYL_MEAN, VARCO_SYL_STD, '#10b981')}
+                </div>
+            </div>
+            <div style="background: #f1f5f9; border: 1px solid #cbd5e1; padding: 12px 18px; border-radius: 8px;">
+                <div style="font-size: 0.9rem; font-weight: bold; color: #475569; margin-bottom: 8px;">🎵 錄音回放 (WAV)：</div>
+                <audio src="${cleanAudioUrl}" controls style="width: 100%; height: 36px;" preload="metadata"></audio>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 12px;">
+                <div style="font-size: 0.9rem; font-weight: bold; color: #475569;">🔍 點擊錯誤類別，查看發生在哪個單字：</div>
+                <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+                    <button class="wer-filter-btn" onclick="window.switchWerFilter(this, 'repair_repetition', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Repetition</button>
+                    <button class="wer-filter-btn" onclick="window.switchWerFilter(this, 'repair_attempt', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Attempt</button>
+                    <button class="wer-filter-btn" onclick="window.switchWerFilter(this, 'repair_restart', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Restart</button>
+                    <button class="wer-filter-btn" onclick="window.switchWerFilter(this, 'substitutions', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Substitutions</button>
+                    <button class="wer-filter-btn" onclick="window.switchWerFilter(this, 'deletions', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Deletions</button>
+                    <button class="wer-filter-btn" onclick="window.switchWerFilter(this, 'insertions', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Insertions</button>
+                </div>
+                <div class="transcript-display-area" style="margin-top: 8px;">
+                    <div style="text-align: center; color: #94a3b8; font-size: 0.95rem; padding: 20px; background: #f8fafc; border-radius: 8px; border: 1px dashed #cbd5e1;">
+                        請點擊上方的分類按鈕，以顯示逐字稿與標記紅字。
+                    </div>
+                </div>
+            </div>
+        `;
+
+        header.addEventListener('click', () => {
+            const isHidden = body.style.display === 'none';
+            body.style.display = isHidden ? 'flex' : 'none';
+            header.querySelector('.arrow-icon').style.transform = isHidden ? 'rotate(180deg)' : 'rotate(0deg)';
+            header.style.background = isHidden ? '#f1f5f9' : '#f8fafc';
+
+            if (isHidden && !body.dataset.chartRendered) {
+                body.dataset.chartRendered = 'true';
+                const canvas = body.querySelector('.radar-canvas');
+                if (canvas) {
+                    new Chart(canvas.getContext('2d'), {
+                        type: 'radar',
+                        data: {
+                            labels: ['Repetition', 'Attempt', 'Restart', 'Substitutions', 'Deletions', 'Insertions'],
+                            datasets: [{ label: '發生次數', data: counts, backgroundColor: 'rgba(230, 57, 70, 0.2)', borderColor: '#e63946', pointBackgroundColor: '#e63946', borderWidth: 2 }]
+                        },
+                        options: { responsive: true, maintainAspectRatio: false, scales: { r: { beginAtZero: true, ticks: { stepSize: 1, backdropColor: 'transparent' }, pointLabels: { font: { size: 11, weight: 'bold' }, color: '#475569' } } }, plugins: { legend: { display: false } } }
+                    });
+                }
+            }
+        });
+
+        strip.appendChild(header);
+        strip.appendChild(body);
+        container.appendChild(strip);
+
+        console.log('🎯 [WER 報表] 整篇模式直接渲染完成，未經任何平均計算！');
+    } catch (err) {
+        console.error('❌ 整篇模式直接渲染失敗：', err);
+    }
+}
+
+
+// ══════════════════════════════════════════════════
 // 📊 多段落報告總成渲染 (精準拆開資料庫大禮盒)
 // ══════════════════════════════════════════════════
-function renderMultipleParagraphsReport(paragraphList, globalStats) {
+/**
+ * 💡 核心修正（whole 模式支援）：
+ *   - 分段練習 (segment)：維持原本邏輯，把 paragraph_list 內每一段的數據平均加總，
+ *     顯示於頂部總成績卡，並逐段列出手風琴長條。
+ *   - 整篇練習 (whole)：後端只會有「一筆」真正的整篇錄音資料（paragraph_index = 0），
+ *     其餘 paragraph_index 1~N 只是分段模式殘留的欄位佔位（file_path / wer 皆為 null），
+ *     不該參與平均、也不該顯示在下方列表。這裡改成直接抓那一筆整篇資料的數值當作
+ *     總成績卡顯示內容（不再平均），並且下方只顯示「整篇朗讀」這一張手風琴卡。
+ */
+// ══════════════════════════════════════════════════
+//  🎵 段落詳細回報 — 分色分段音檔對照小工具 (chunk-aligned playback + transcript)
+// ══════════════════════════════════════════════════
+/**
+ * 💡 依照 NPVI 回傳的 chunk_details（每個語塊的 xmin/xmax/label）
+ *    把整段 word_alignments 依序分配進對應的 chunk。
+ *    因為我們沒有逐字時間戳，這裡用「每個 chunk 的 hypothesis 字數」當作分配依據：
+ *    依序消耗 alignment_report，湊滿一個 chunk 的字數就換下一個 chunk。
+ *    這是近似值，但因為整份文本是照順序念的，實務上準確度足夠。
+ */
+function assignItemsToChunks(chunks, alignmentReport) {
+    const sorted = [...(chunks || [])].sort((a, b) => (a.xmin || 0) - (b.xmin || 0));
+    if (sorted.length === 0) {
+        return [{ xmin: 0, xmax: 0, label: '', items: alignmentReport || [] }];
+    }
+
+    const targets = sorted.map(c => {
+        const words = (c.label || '').trim().split(/\s+/).filter(Boolean);
+        return Math.max(words.length, 1);
+    });
+
+    const buckets = sorted.map(() => []);
+    let idx = 0;
+    let count = 0;
+
+    (alignmentReport || []).forEach(item => {
+        if (idx >= buckets.length) idx = buckets.length - 1;
+        buckets[idx].push(item);
+
+        const hyp = (item.Hypothesis || item.hypothesis || '').trim();
+        const isRealHyp = hyp && hyp !== '—' && hyp !== '–';
+        if (isRealHyp) {
+            count++;
+            if (count >= targets[idx] && idx < buckets.length - 1) {
+                idx++;
+                count = 0;
+            }
+        }
+    });
+
+    return sorted.map((c, i) => ({ ...c, items: buckets[i] }));
+}
+
+/**
+ * 💡 渲染逐段對照的逐字稿列（上：正確課文 / 下：使用者實際發音），
+ *    每個 chunk 一塊，跟上方時間軸的顏色一黑一白對應。
+ *    targetCategory 有值時，只把該類別的錯誤標紅；null 時全部維持中性色。
+ */
+// ══════════════════════════════════════════════════
+//  🎯 nPVI / Varco (syl) 達標判斷：標準值 ± 標準差
+// ══════════════════════════════════════════════════
+// 💡 這裡的標準值是用比例(0~1)乘以 100 換算過來的，
+//    因為後端存進資料庫的 npvi/varco 分數本身就是 raw_value * 100。
+const NPVI_SYL_MEAN = 56.22;   // 0.5622 * 100
+const NPVI_SYL_STD = 13.35;    // 0.1335 * 100
+const VARCO_SYL_MEAN = 46.71;  // 0.4671 * 100
+const VARCO_SYL_STD = 9.33;    // 0.0933 * 100
+
+/**
+ * 💡 畫一條子彈圖：實測值是否落在「標準值 ± 標準差」範圍內，
+ *    範圍內顯示綠色 ✓ 過關，範圍外顯示紅色 ✗ 未過關。
+ *    圖表上用綠色淡色區塊標出合格範圍，兩條綠色細線是範圍的上下界。
+ */
+function renderFluencyBulletBar(label, value, mean, std, barColor) {
+    const low = mean - std;
+    const high = mean + std;
+    const passed = value >= low && value <= high;
+    const maxScale = Math.max(high * 1.4, value * 1.15, 10);
+    const toPct = (v) => Math.max(0, Math.min((v / maxScale) * 100, 100));
+    const valuePct = toPct(value);
+    const lowPct = toPct(low);
+    const highPct = toPct(high);
+    const bandWidthPct = Math.max(highPct - lowPct, 0);
+    const statusHtml = passed
+        ? `<span style="color:#16a34a; font-weight:bold;">✓ 過關</span>`
+        : `<span style="color:#e63946; font-weight:bold;">✗ 未過關</span>`;
+
+    return `
+        <div>
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px; font-size:0.85rem; font-weight:bold; color:#333; margin-bottom:6px;">
+                <span>${label}</span>
+                <span>實測: <span style="color:${barColor};">${value.toFixed(2)}</span>　標準: ${mean.toFixed(2)} ± ${std.toFixed(2)}　${statusHtml}</span>
+            </div>
+            <div style="position:relative; width:100%; height:24px; background:#e2e8f0; border-radius:12px; overflow:hidden;">
+                <div style="position:absolute; left:${lowPct}%; width:${bandWidthPct}%; top:0; bottom:0; background:rgba(255,0,0,0.08); z-index:5;"></div>
+                <div style="width:${valuePct}%; height:100%; background:${barColor}; transition:width 1s;"></div>
+                <div style="position:absolute; left:${lowPct}%; top:0; bottom:0; width:3px; background:#ff0000; z-index:10;"></div>
+                <div style="position:absolute; left:${highPct}%; top:0; bottom:0; width:3px; background:#ff0000; z-index:10;"></div>
+            </div>
+        </div>
+    `;
+}
+
+function renderChunkTranscriptRow(layout, targetCategory) {
+    const targetCategoryMap = {
+        'repair_repetition': 'Repair_Repetition',
+        'repair_attempt': 'Repair_Attempt',
+        'repair_restart': 'Repair_Restart',
+        'substitutions': 'Substitute',
+        'deletions': 'Delete',
+        'insertions': 'Insert'
+    };
+    const normalizedTarget = targetCategory ? (targetCategoryMap[targetCategory] || targetCategory) : null;
+
+    return layout.map((c, i) => {
+        const isBlue = i % 2 === 0;
+        const bg = isBlue ? '#eff6ff' : '#ecfdf5';       // 淺藍 / 淺綠 交錯
+        const refColor = '#1f2937';
+        const hypColorDefault = '#6b7280';
+
+        const wordsHtml = (c.items || []).map(item => {
+            const cat = (item.Category || item.category || '').toString();
+            const ref = (item.Reference || item.reference || '—').trim();
+            let hyp = (item.Hypothesis || item.hypothesis || '—').trim();
+            const isTargetError = normalizedTarget && cat.toLowerCase() === normalizedTarget.toLowerCase();
+
+            let hypStyle = `color: ${hypColorDefault}; font-weight: 500;`;
+            let displayHyp = hyp;
+
+            if (isTargetError) {
+                hypStyle = 'color: #e63946; font-weight: 800; background: #fee2e2; padding: 2px 4px; border-radius: 4px; border-bottom: 2px solid #e63946;';
+                if (cat.toLowerCase() === 'delete') displayHyp = 'NULL';
+            } else if (hyp === '—' || !hyp) {
+                displayHyp = '-';
+                hypStyle = 'color: #6b7280; opacity: 0.6;';
+            }
+
+            return `
+                <div style="display:flex; flex-direction:column; align-items:center; margin: 4px 6px; min-width: 34px; flex: 0 0 auto; white-space:nowrap;">
+                    <span style="font-size:0.95rem; color:${refColor}; font-weight:600;">${ref === '—' ? '-' : ref}</span>
+                    <span style="font-size:0.9rem; ${hypStyle}">${displayHyp}</span>
+                </div>
+            `;
+        }).join('');
+
+        const spacerHtml = (c.gapBeforePx && c.gapBeforePx > 0.5)
+            ? `<div style="flex: 0 0 ${c.gapBeforePx}px; width:${c.gapBeforePx}px;"></div>`
+            : '';
+
+        return spacerHtml + `
+            <div class="chunk-transcript-block" style="flex: 0 0 ${c.width}px; width:${c.width}px; background:${bg};
+                        display:flex; flex-wrap:nowrap; align-items:flex-start; padding:8px 6px; box-sizing:border-box;
+                        border-right: 3px solid rgba(30,41,59,0.35); overflow:visible;">
+                ${wordsHtml || '<span style="color:#9ca3af;font-size:0.8rem;">（無內容）</span>'}
+            </div>
+        `;
+    }).join('');
+}
+
+/**
+ * 💡 建立完整的「WaveSurfer 波形(疊加一深一淺色塊做分段) + 逐字稿對照 + 篩選按鈕」小工具 HTML。
+ *    chunks 直接用 extendedReport.chunk_details（NPVI 回傳的 chunk_results，含 xmin/xmax/label）。
+ */
+function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl) {
+    const WORD_SLOT_WIDTH = 50;  // 每個字（含上下兩行）大約需要的寬度
+    const MIN_PX_PER_SEC = 60;   // 每秒最少像素，避免音檔很長、字很少時比例被拉得太小
+
+    const grouped = assignItemsToChunks(chunks, alignmentReport);
+
+    // 💡 先算出每個分段的文字排成「一整排、不換行」實際需要多寬，
+    //    再反推「這一段每秒至少要有多少像素」，取全部分段裡最吃緊的那一個，
+    //    當作整個波形統一放大的比例——這樣波形會被拉長到剛好能讓文字都排成一排，
+    //    而不是文字被硬擠到跟波形一樣窄。
+    let pxPerSec = MIN_PX_PER_SEC;
+    grouped.forEach((c) => {
+        const duration = Math.max((c.xmax || 0) - (c.xmin || 0), 0.1);
+        const wordCount = Math.max((c.items || []).length, 1);
+        const neededWidth = wordCount * WORD_SLOT_WIDTH + 20;
+        const neededPxPerSec = neededWidth / duration;
+        if (neededPxPerSec > pxPerSec) pxPerSec = neededPxPerSec;
+    });
+
+    let prevXmax = 0;
+    const layout = grouped.map((c) => {
+        const duration = Math.max((c.xmax || 0) - (c.xmin || 0), 0.1);
+        // 💡 核心修正：chunk 跟 chunk 之間常常有停頓（靜音），
+        //    這段停頓也要換算成寬度、放進逐字稿排版裡，
+        //    不然逐字稿的色塊會少算這段空白、一路往前擠，
+        //    越後面的分段跟波形上真正的位置就會差越多。
+        const gapBeforeSec = Math.max((c.xmin || 0) - prevXmax, 0);
+        const gapBeforePx = gapBeforeSec * pxPerSec;
+        const left = (c.xmin || 0) * pxPerSec; // 用絕對時間換算位置，保證跟波形對得上
+        const width = duration * pxPerSec;
+        prevXmax = c.xmax || 0;
+        return { xmin: c.xmin, xmax: c.xmax, left, width, gapBeforePx, items: c.items };
+    });
+
+    const transcriptHtml = renderChunkTranscriptRow(layout, null);
+    const layoutJson = JSON.stringify(layout).replace(/'/g, "&apos;");
+    // 💡 波形上疊加色塊只需要每段的起訖時間，不需要文字內容
+    const chunkTimesJson = JSON.stringify(grouped.map(c => ({ xmin: c.xmin, xmax: c.xmax }))).replace(/'/g, "&apos;");
+
+    // 💡 核心修正：算出一個明確固定的總寬度（像素），直接指定給容器，
+    //    不要再用 min-width:100% 這種「跟父層寬度綁定」的寫法——
+    //    那種寫法會在「捲軸出現/消失造成可視寬度改變」時，
+    //    跟波形實際內容寬度互相牽動，形成版面量測迴圈，畫面就會一直左右跳動。
+    const totalDurationSec = layout.length ? Math.max(...layout.map(l => l.xmax || 0)) : 0;
+    const totalWidthPx = Math.max(Math.ceil(totalDurationSec * pxPerSec) + 20, 200);
+
+    let cleanAudioUrl = rawAudioUrl || '';
+    if (cleanAudioUrl && !cleanAudioUrl.startsWith('/') && !cleanAudioUrl.startsWith('http')) cleanAudioUrl = '/' + cleanAudioUrl;
+    if (cleanAudioUrl) cleanAudioUrl += (cleanAudioUrl.includes('?') ? '&' : '?') + 't=' + Date.now();
+
+    return `
+        <div class="chunk-audio-widget" id="${stripId}-chunkwidget"
+             data-layout='${layoutJson}' data-chunks='${chunkTimesJson}' data-audio-url="${cleanAudioUrl}" data-px-per-sec="${pxPerSec}">
+            <div style="font-size: 0.9rem; font-weight: bold; color: #475569; margin-bottom: 8px;">
+                🎵 錄音回放（波形上的色塊 = 逐段切分，上下紅線隨播放即時移動）：
+            </div>
+
+            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom: 10px;">
+                <button id="${stripId}-playbtn" type="button" style="padding:6px 16px; border:none; background:#e63946; color:#fff; border-radius:20px; font-weight:bold; cursor:pointer; font-size:0.85rem; white-space:nowrap;">▶ 播放</button>
+                <div style="width:1px; height:22px; background:#e2e8f0; margin: 0 4px;"></div>
+                <button class="wer-filter-btn-chunked" onclick="window.switchWerFilterChunked(this, 'repair_repetition', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Repetition</button>
+                <button class="wer-filter-btn-chunked" onclick="window.switchWerFilterChunked(this, 'repair_attempt', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Attempt</button>
+                <button class="wer-filter-btn-chunked" onclick="window.switchWerFilterChunked(this, 'repair_restart', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Restart</button>
+                <button class="wer-filter-btn-chunked" onclick="window.switchWerFilterChunked(this, 'substitutions', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Substitutions</button>
+                <button class="wer-filter-btn-chunked" onclick="window.switchWerFilterChunked(this, 'deletions', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Deletions</button>
+                <button class="wer-filter-btn-chunked" onclick="window.switchWerFilterChunked(this, 'insertions', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Insertions</button>
+            </div>
+
+            <!-- 💡 波形與逐字稿現在共用同一個捲動容器，左右拖曳一次同時帶動兩者。
+                 寬度用明確算好的固定像素值，不用 min-width:100%，避免版面量測迴圈造成跳動。 -->
+            <div id="${stripId}-scrollwrap" style="overflow-x: auto; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff; cursor: grab;">
+                <div id="${stripId}-scrollarea" style="width: ${totalWidthPx}px;">
+                    <div id="${stripId}-waveform" style="width: ${totalWidthPx}px; padding: 10px 10px 0 10px; box-sizing: border-box;"></div>
+                    <div id="${stripId}-transcript-wrap" style="position: relative; width: ${totalWidthPx}px;">
+                        <div id="${stripId}-transcript" style="display: flex; border-top: 1px solid #e2e8f0;">
+                            ${transcriptHtml}
+                        </div>
+                        <div id="${stripId}-transcript-playhead" style="position: absolute; top: 0; bottom: 0; width: 2px; background: #e63946; left: 0; pointer-events: none;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+/** 💡 點擊錯誤類別按鈕：只重繪逐字稿列，波形跟播放狀態維持不動 */
+window.switchWerFilterChunked = function(btn, errorType, stripId) {
+    const widget = document.getElementById(`${stripId}-chunkwidget`);
+    if (!widget) return;
+
+    widget.querySelectorAll('.wer-filter-btn-chunked').forEach(b => {
+        b.style.background = '#f1f5f9';
+        b.style.color = '#475569';
+    });
+    btn.style.background = '#e63946';
+    btn.style.color = '#fff';
+
+    let layout = [];
+    try { layout = JSON.parse(widget.dataset.layout); } catch (e) { return; }
+
+    const transcriptRow = document.getElementById(`${stripId}-transcript`);
+    if (transcriptRow) {
+        transcriptRow.innerHTML = renderChunkTranscriptRow(layout, errorType);
+    }
+};
+
+/**
+ * 💡 插入 DOM 後呼叫：用 WaveSurfer.js 畫出真正的錄音波形（跟錄音頁面同一套元件），
+ *    播放頭是 WaveSurfer 內建游標，直接畫在波形本體上；
+ *    一深一淺的分段色塊改用 WaveSurfer 的 Regions 外掛直接疊在波形上，
+ *    不再另外畫一條獨立的時間軸。
+ */
+function initChunkedAudioBlock(stripId) {
+    const widget = document.getElementById(`${stripId}-chunkwidget`);
+    const waveformEl = document.getElementById(`${stripId}-waveform`);
+    const scrollWrap = document.getElementById(`${stripId}-scrollwrap`);
+    const playBtn = document.getElementById(`${stripId}-playbtn`);
+    if (!widget || !waveformEl) return;
+
+    let chunkTimes = [];
+    try { chunkTimes = JSON.parse(widget.dataset.chunks); } catch (e) { chunkTimes = []; }
+    const audioUrl = widget.dataset.audioUrl || '';
+    const pxPerSec = parseFloat(widget.dataset.pxPerSec) || 90;
+
+    if (typeof WaveSurfer === 'undefined') {
+        console.warn('⚠️ WaveSurfer 尚未載入，無法顯示波形');
+        return;
+    }
+
+    // 💡 防呆：如果這個波形容器之前已經建立過 WaveSurfer 實例（例如報表被重新渲染過一次），
+    //    先把舊的銷毀掉，避免同一個位置疊了兩個實例互相干擾、造成畫面跳動。
+    if (waveformEl._wsInstance) {
+        try { waveformEl._wsInstance.destroy(); } catch (e) { /* 忽略銷毀失敗 */ }
+        waveformEl._wsInstance = null;
+    }
+
+    const ws = WaveSurfer.create({
+        container: waveformEl,
+        waveColor: '#ffb3b3',
+        progressColor: '#e63946',
+        cursorColor: '#1f2937',
+        cursorWidth: 2,
+        barWidth: 3,
+        barGap: 2,
+        height: 80,
+        minPxPerSec: pxPerSec,   // 💡 跟逐字稿列用同一個動態算出的比例，兩者才能真正對齊
+        autoScroll: false,  // 💡 關掉：這個功能會跟外層我們自己手動控制的捲動容器互相搶控制權，
+                             //    導致波形上的色塊左右跳動；改成完全由使用者手動拖曳捲動。
+        autoCenter: false,
+        url: audioUrl
+    });
+    waveformEl._wsInstance = ws;
+
+    // 💡 用 Regions 外掛把淺藍/淺綠交錯的分段色塊直接疊加在波形上
+    //    改綁在 'ready'（完全載入完成才觸發一次），避免 'decode' 在載入過程中
+    //    可能觸發不只一次、導致色塊被重複疊加越疊越深、看起來像在閃爍。
+    if (WaveSurfer.Regions) {
+        const wsRegionsLocal = ws.registerPlugin(WaveSurfer.Regions.create());
+        let regionsAdded = false;
+        ws.on('ready', () => {
+            if (regionsAdded) return; // 防呆：確保只加一次
+            regionsAdded = true;
+            chunkTimes.forEach((c, i) => {
+                const isBlue = i % 2 === 0;
+                const overlayColor = isBlue ? 'rgba(59,130,246,0.18)' : 'rgba(16,185,129,0.18)';
+                const region = wsRegionsLocal.addRegion({
+                    start: c.xmin,
+                    end: c.xmax,
+                    color: overlayColor,
+                    drag: false,
+                    resize: false
+                });
+                // 💡 點擊色塊：直接跳到那一段開頭並播放
+                region.on('click', (e) => {
+                    e.stopPropagation();
+                    ws.setTime(c.xmin);
+                    ws.play();
+                });
+            });
+        });
+    }
+
+    if (playBtn) {
+        playBtn.addEventListener('click', () => ws.playPause());
+        ws.on('play', () => { playBtn.textContent = '⏸ 暫停'; });
+        ws.on('pause', () => { playBtn.textContent = '▶ 播放'; });
+        ws.on('finish', () => { playBtn.textContent = '▶ 播放'; });
+    }
+
+    // 💡 逐字稿列上方也加一條紅線，跟著播放進度即時移動，
+    //    這樣上面(波形)跟下面(逐字稿)都能看到目前念到哪，不用只看波形自己猜。
+    const transcriptPlayhead = document.getElementById(`${stripId}-transcript-playhead`);
+    let layoutForPlayhead = [];
+    try { layoutForPlayhead = JSON.parse(widget.dataset.layout); } catch (e) { layoutForPlayhead = []; }
+
+    function timeToTranscriptPixel(t) {
+        for (let i = 0; i < layoutForPlayhead.length; i++) {
+            const c = layoutForPlayhead[i];
+            if (t <= c.xmax) {
+                if (t < c.xmin) return c.left;
+                const frac = (t - c.xmin) / Math.max(c.xmax - c.xmin, 0.001);
+                return c.left + frac * c.width;
+            }
+        }
+        const last = layoutForPlayhead[layoutForPlayhead.length - 1];
+        return last ? last.left + last.width : 0;
+    }
+
+    if (transcriptPlayhead) {
+        ws.on('timeupdate', (currentTime) => {
+            transcriptPlayhead.style.left = timeToTranscriptPixel(currentTime) + 'px';
+        });
+    }
+
+    // 💡 波形跟逐字稿現在是同一個捲動容器裡的兩個區塊，
+    //    捲動這個容器就會「音檔跟文字一起移動」，不需要再手動同步兩個捲軸。
+    //    這裡只加滑鼠按住拖曳的手勢，體驗類似手機滑動。
+    if (scrollWrap) {
+        let isDown = false;
+        let startX = 0;
+        let scrollLeftStart = 0;
+        scrollWrap.addEventListener('mousedown', (e) => {
+            isDown = true;
+            scrollWrap.style.cursor = 'grabbing';
+            startX = e.pageX - scrollWrap.offsetLeft;
+            scrollLeftStart = scrollWrap.scrollLeft;
+        });
+        ['mouseleave', 'mouseup'].forEach(evt => {
+            scrollWrap.addEventListener(evt, () => { isDown = false; scrollWrap.style.cursor = 'grab'; });
+        });
+        scrollWrap.addEventListener('mousemove', (e) => {
+            if (!isDown) return;
+            e.preventDefault();
+            const x = e.pageX - scrollWrap.offsetLeft;
+            const walk = (x - startX) * 1.2;
+            scrollWrap.scrollLeft = scrollLeftStart - walk;
+        });
+    }
+}
+
+
+function renderMultipleParagraphsReport(paragraphList, globalStats, mode = 'segment') {
     try {
+        const isWhole = mode === 'whole';
+
+        // 💡 whole 模式：
+        //   - 上方總成績卡：直接採用後端回傳的 global_stats，原封不動顯示，不在前端做任何推導/平均計算。
+        //   - 下方段落列表：篩出真正有錄音的「整篇」那一筆（paragraph_index = 0，找不到則抓任何一筆有資料的）。
+        let effectiveList = paragraphList || [];
+        const effectiveGlobalStats = globalStats;
+
+        if (isWhole) {
+            let wholeEntry = (paragraphList || []).find(
+                p => p.paragraph_index === 0 && p.file_path !== null && p.wer !== null
+            );
+            if (!wholeEntry) {
+                wholeEntry = (paragraphList || []).find(
+                    p => p.file_path !== null && p.wer !== null
+                );
+            }
+            effectiveList = wholeEntry ? [wholeEntry] : [];
+        }
+
         if (document.getElementById('werScoreText')) {
-            document.getElementById('werScoreText').innerText = globalStats ? (globalStats.wer_average * 100).toFixed(1) + '%' : '0.0%';
+            document.getElementById('werScoreText').innerText =
+                effectiveGlobalStats ? (effectiveGlobalStats.wer_average * 100).toFixed(1) + '%' : '0.0%';
         }
         if (document.getElementById('werTotalWords')) {
-            document.getElementById('werTotalWords').innerText = globalStats ? globalStats.total_words : '0';
+            document.getElementById('werTotalWords').innerText =
+                effectiveGlobalStats ? effectiveGlobalStats.total_words : '0';
         }
         if (document.getElementById('werErrorCount')) {
-            document.getElementById('werErrorCount').innerText = globalStats ? globalStats.total_errors : '0';
+            document.getElementById('werErrorCount').innerText =
+                effectiveGlobalStats ? effectiveGlobalStats.total_errors : '0';
         }
         if (document.getElementById('werAvgNpvi')) {
-            document.getElementById('werAvgNpvi').innerText = (globalStats && globalStats.average_npvi != null) ? parseFloat(globalStats.average_npvi).toFixed(2) : '0.00';
+            document.getElementById('werAvgNpvi').innerText =
+                (effectiveGlobalStats && effectiveGlobalStats.average_npvi != null)
+                    ? parseFloat(effectiveGlobalStats.average_npvi).toFixed(2) : '0.00';
         }
         if (document.getElementById('werAvgVarco')) {
-            document.getElementById('werAvgVarco').innerText = (globalStats && globalStats.average_varco != null) ? parseFloat(globalStats.average_varco).toFixed(2) : '0.00';
+            document.getElementById('werAvgVarco').innerText =
+                (effectiveGlobalStats && effectiveGlobalStats.average_varco != null)
+                    ? parseFloat(effectiveGlobalStats.average_varco).toFixed(2) : '0.00';
+        }
+
+        // 💡 順手把標題文字也改一下，whole 模式不叫「Total 平均」
+        const bannerTitle = document.getElementById('scoreBannerTitle');
+        if (bannerTitle) {
+            bannerTitle.innerHTML = isWhole
+                ? '📊 整篇朗讀流暢度結算看板'
+                : '📊 總體朗讀流暢度結算看板 (Total 平均)';
         }
 
         const container = document.getElementById('werParagraphsContainer');
         if (!container) return;
         container.innerHTML = '';
 
-        paragraphList.forEach((para) => {
+        if (isWhole && effectiveList.length === 0) {
+            container.innerHTML = `
+                <div style="background: #fff; border: 1px solid #e2e8f0; padding: 40px; border-radius: 12px; text-align: center; width: 100%; box-sizing: border-box;">
+                    <p style="color: #999; margin: 0; font-size: 0.95rem;">暫無整篇錄音分析資料。</p>
+                </div>`;
+            return;
+        }
+
+        effectiveList.forEach((para) => {
             const hasRecorded = para.file_path !== null && para.wer !== null;
             const stripId = `strip-para-${para.paragraph_index}-${Date.now()}`;
 
@@ -2874,6 +3128,9 @@ function renderMultipleParagraphsReport(paragraphList, globalStats) {
                 strip.setAttribute('data-alignment', JSON.stringify(alignments).replace(/'/g, "&apos;"));
             }
 
+            // 💡 whole 模式的段落標題顯示為「整篇朗讀」，分段模式維持「段落 N」
+            const paraLabel = isWhole ? '整篇朗讀' : `段落 ${para.paragraph_index}`;
+
             // 標題列
             const singleParaNpvi = (hasRecorded && para.npvi != null) ? parseFloat(para.npvi).toFixed(2) : '—';
             const singleParaVarco = (hasRecorded && para.varco != null) ? parseFloat(para.varco).toFixed(2) : '—';
@@ -2885,7 +3142,7 @@ function renderMultipleParagraphsReport(paragraphList, globalStats) {
             header.style.cssText = `padding: 18px 24px; background: ${hasRecorded ? '#f8fafc' : '#fcfcfc'}; display: flex; align-items: center; justify-content: space-between; cursor: ${hasRecorded ? 'pointer' : 'not-allowed'}; opacity: ${hasRecorded ? '1' : '0.65'};`;
             header.innerHTML = `
                 <div style="display: flex; align-items: center; gap: 30px; flex: 1; flex-wrap: wrap;">
-                    <span style="font-weight: bold; color: #1f2937; min-width: 65px; font-size: 1.05rem;">段落 ${para.paragraph_index}</span>
+                    <span style="font-weight: bold; color: #1f2937; min-width: 65px; font-size: 1.05rem;">${paraLabel}</span>
                     ${statusBadge}
                     <div style="display: flex; gap: 24px; color: #4a5568; font-size: 0.92rem; align-items: center; flex-wrap: wrap;">
                         <div>WER: <strong style="color: #e63946; font-size: 1.05rem;">${hasRecorded ? (para.wer * 100).toFixed(1) + '%' : '—'}</strong></div>
@@ -2915,9 +3172,6 @@ function renderMultipleParagraphsReport(paragraphList, globalStats) {
                     stats.insertions || 0
                 ];
 
-                // 子彈圖設定
-                const targetNpvi = 50; 
-                const targetVarco = 45;
                 const actualNpviNum = parseFloat(singleParaNpvi) || 0;
                 const actualVarcoNum = parseFloat(singleParaVarco) || 0;
 
@@ -2934,67 +3188,17 @@ function renderMultipleParagraphsReport(paragraphList, globalStats) {
                         <!-- 右側：nPVI / Varco 子彈圖 -->
                         <div style="flex: 1; min-width: 300px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; justify-content: center; gap: 20px;">
                             <div style="font-size: 0.95rem; font-weight: bold; color: #475569; margin-bottom: 4px;">🎯 流暢度達標分析 (Bullet Chart)</div>
-                            
-                            <!-- nPVI 子彈圖 -->
-                            <div>
-                                <div style="display: flex; justify-content: space-between; font-size: 0.85rem; font-weight: bold; color: #333; margin-bottom: 6px;">
-                                    <span>nPVI 節奏指數</span>
-                                    <span>實測: <span style="color: #2563eb;">${actualNpviNum}</span> / 標準: ${targetNpvi}</span>
-                                </div>
-                                <div style="position: relative; width: 100%; height: 24px; background: #e2e8f0; border-radius: 12px; overflow: hidden;">
-                                    <div style="width: ${Math.min((actualNpviNum / targetNpvi) * 80, 100)}%; height: 100%; background: #3b82f6; transition: width 1s;"></div>
-                                    <div style="position: absolute; left: 80%; top: 0; bottom: 0; width: 4px; background: #e63946; z-index: 10;" title="目標標準線"></div>
-                                </div>
-                            </div>
-
-                            <!-- Varco 子彈圖 -->
-                            <div>
-                                <div style="display: flex; justify-content: space-between; font-size: 0.85rem; font-weight: bold; color: #333; margin-bottom: 6px;">
-                                    <span>Varco 語速變異</span>
-                                    <span>實測: <span style="color: #10b981;">${actualVarcoNum}</span> / 標準: ${targetVarco}</span>
-                                </div>
-                                <div style="position: relative; width: 100%; height: 24px; background: #e2e8f0; border-radius: 12px; overflow: hidden;">
-                                    <div style="width: ${Math.min((actualVarcoNum / targetVarco) * 80, 100)}%; height: 100%; background: #10b981; transition: width 1s;"></div>
-                                    <div style="position: absolute; left: 80%; top: 0; bottom: 0; width: 4px; background: #e63946; z-index: 10;" title="目標標準線"></div>
-                                </div>
-                            </div>
+                            ${renderFluencyBulletBar('nPVI 節奏指數', actualNpviNum, NPVI_SYL_MEAN, NPVI_SYL_STD, '#3b82f6')}
+                            ${renderFluencyBulletBar('Varco 語速變異', actualVarcoNum, VARCO_SYL_MEAN, VARCO_SYL_STD, '#10b981')}
                         </div>
                     </div>
                 `;
 
-                // 🎵 區塊 2：音檔播放器
-                let cleanAudioUrl = para.file_path || '';
-                if (cleanAudioUrl && !cleanAudioUrl.startsWith('/') && !cleanAudioUrl.startsWith('http')) cleanAudioUrl = '/' + cleanAudioUrl;
-                if (cleanAudioUrl) cleanAudioUrl += (cleanAudioUrl.includes('?') ? '&' : '?') + 't=' + Date.now();
+                // 🎵 區塊 2：分色分段音檔對照小工具（時間軸一黑一白分段 + 逐段對照逐字稿 + 錯誤篩選）
+                const chunkListForWidget = extendedReport.chunk_details || [];
+                const chunkedAudioHTML = buildChunkedAudioBlock(stripId, chunkListForWidget, alignments, para.file_path || '');
 
-                const audioHTML = `
-                    <div style="background: #f1f5f9; border: 1px solid #cbd5e1; padding: 12px 18px; border-radius: 8px;">
-                        <div style="font-size: 0.9rem; font-weight: bold; color: #475569; margin-bottom: 8px;">🎵 錄音回放 (WAV)：</div>
-                        <audio src="${cleanAudioUrl}" controls style="width: 100%; height: 36px;" preload="metadata"></audio>
-                    </div>
-                `;
-
-                // 📝 區塊 3：互動式錯誤篩選逐字稿
-                const filterHTML = `
-                    <div style="display: flex; flex-direction: column; gap: 12px;">
-                        <div style="font-size: 0.9rem; font-weight: bold; color: #475569;">🔍 點擊錯誤類別，查看發生在哪個單字：</div>
-                        <div style="display: flex; flex-wrap: wrap; gap: 8px;">
-                            <button class="wer-filter-btn" onclick="window.switchWerFilter(this, 'repair_repetition', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Repetition</button>
-                            <button class="wer-filter-btn" onclick="window.switchWerFilter(this, 'repair_attempt', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Attempt</button>
-                            <button class="wer-filter-btn" onclick="window.switchWerFilter(this, 'repair_restart', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Restart</button>
-                            <button class="wer-filter-btn" onclick="window.switchWerFilter(this, 'substitutions', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Substitutions</button>
-                            <button class="wer-filter-btn" onclick="window.switchWerFilter(this, 'deletions', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Deletions</button>
-                            <button class="wer-filter-btn" onclick="window.switchWerFilter(this, 'insertions', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Insertions</button>
-                        </div>
-                        <div class="transcript-display-area" style="display: flex; gap: 20px; flex-wrap: wrap; margin-top: 8px;">
-                            <div style="flex: 1; text-align: center; color: #94a3b8; font-size: 0.95rem; padding: 20px; background: #f8fafc; border-radius: 8px; border: 1px dashed #cbd5e1;">
-                                請點擊上方的分類按鈕，以顯示逐字稿與標記紅字。
-                            </div>
-                        </div>
-                    </div>
-                `;
-
-                body.innerHTML = chartsHTML + audioHTML + filterHTML;
+                body.innerHTML = chartsHTML + chunkedAudioHTML;
 
                 // ── 手風琴展開事件 (延遲加載雷達圖) ──
                 header.addEventListener('click', () => {
@@ -3038,20 +3242,15 @@ function renderMultipleParagraphsReport(paragraphList, globalStats) {
                         }
                     }
                 });
-                body.addEventListener('click', function(e) {
-                    const btn = e.target.closest('.wer-filter-btn');
-                    if (btn) {
-                        const errorType = btn.dataset.type;
-                        if (errorType) {
-                            window.switchWerFilter(btn, errorType, stripId);
-                        }
-                    }
-                });
             }
 
             strip.appendChild(header);
             strip.appendChild(body);
             container.appendChild(strip);
+
+            if (hasRecorded) {
+                initChunkedAudioBlock(stripId);
+            }
         });
 
     } catch (err) {
@@ -3098,7 +3297,7 @@ async function _loadAndRenderProjectReport(projectId) {
 
         const resData = await response.json();
         if (resData.status === 'success') {
-            // 💡 新增：帶入這個 project 實際的練習模式
+            // 💡 帶入這個 project 實際的練習模式，whole 模式才能正確走「不平均、直接顯示整篇數值」的邏輯
             const mode = _loadPracticeModeForProject(projectId) || 'segment';
             renderMultipleParagraphsReport(resData.paragraph_list, resData.global_stats, mode);
         } else {
@@ -3163,7 +3362,9 @@ async function loadHistoryProject(projectId, articleTitle) {
             if (chatTitle) chatTitle.innerText = `歷史紀錄：${articleTitle}`;
 
             // 5. 🚀 丟進手風琴渲染引擎，秒畫出當年的滿版長條與下拉彩色字！
-            renderMultipleParagraphsReport(resData.paragraph_list, resData.global_stats);
+            //    💡 帶入這個 project 實際的練習模式，whole 模式才能正確顯示「不平均」的整篇成績
+            const mode = _loadPracticeModeForProject(projectId) || 'segment';
+            renderMultipleParagraphsReport(resData.paragraph_list, resData.global_stats, mode);
 
             showToast("歷史報告載入成功 🎉");
         } else {
