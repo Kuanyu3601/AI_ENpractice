@@ -50,6 +50,24 @@ services:
         PMA_USER: root
         PMA_PASSWORD: yourpassword
 
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: always
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    # 💡 只有這一段是新加的：告訴 Docker 這個服務要用 GPU
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1              # 用 1 張顯卡；如果你有多張、想全部給它用，改成 all
+              capabilities: [gpu]
+
 volumes:
   mysql_data:
   shared-data:
+  ollama_data:

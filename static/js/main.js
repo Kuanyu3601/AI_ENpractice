@@ -1160,12 +1160,8 @@ function resetRecordUI() {
     const audio = document.getElementById('playbackAudio');
     if (audio) { audio.pause(); audio.removeAttribute('src'); audio.load(); }
     const scoreText = document.getElementById('werScoreText');
-    const totalWords = document.getElementById('werTotalWords');
-    const errorCountEl = document.getElementById('werErrorCount');
 
     if (scoreText) scoreText.textContent = '0.0%';
-    if (totalWords) totalWords.textContent = '0';
-    if (errorCountEl) errorCountEl.textContent = '0';
 }
 
 /** 💡 核心三段分流控制 - 精準判定自訂狀態 */
@@ -1388,13 +1384,19 @@ async function uploadAudio() {
             if (window.ParagraphUI) ParagraphUI.markRecorded(state.currentParagraph);
 
             if (result.wer_result && result.wer_result.statistics) {
-                // 補丁安全防禦：如果後端 statistics 裡沒有 npvi/varco，把外層實體算好的分數注入進去
+                // 補丁安全防禦：如果後端 statistics 裡沒有 npvi/varco/Ollama評分，把外層實體算好的分數注入進去
                 if (result.wer_result.npvi !== undefined) {
                     result.wer_result.statistics.npvi = result.wer_result.npvi;
                 }
                 if (result.wer_result.varco !== undefined) {
                     result.wer_result.statistics.varco = result.wer_result.varco;
                 }
+                // 💡 新增：四個 Ollama 評分維度（完整度/準確度/流利度/語法），供雷達圖使用
+                result.wer_result.statistics.score_completeness = result.wer_result.score_completeness ?? 0;
+                result.wer_result.statistics.score_accuracy = result.wer_result.score_accuracy ?? 0;
+                result.wer_result.statistics.score_fluency = result.wer_result.score_fluency ?? 0;
+                result.wer_result.statistics.score_grammar = result.wer_result.score_grammar ?? 0;
+                result.wer_result.statistics.overall_fluency_score_100 = result.wer_result.overall_fluency_score_100 ?? 0;
 
                 // 呼叫單段即時更新器
                 renderWerReportToPanel3(
@@ -2473,9 +2475,6 @@ function renderWerReportToPanel3(alignmentReport, stats, currentParaNum = 1, bac
         if (document.getElementById('werScoreText')) {
             document.getElementById('werScoreText').innerText = (stats.wer_repair_fluency * 100).toFixed(1) + '%';
         }
-        if (document.getElementById('werTotalWords')) {
-            document.getElementById('werTotalWords').innerText = stats.total_ref_words;
-        }
 
         const container = document.getElementById('werParagraphsContainer');
         if (!container) return;
@@ -2528,10 +2527,6 @@ function renderWerReportToPanel3(alignmentReport, stats, currentParaNum = 1, bac
                 </div>
             `;
         });
-
-        // 更新大底座的即時錯誤數
-        const errorCountEl = document.getElementById('werErrorCount');
-        if (errorCountEl) errorCountEl.textContent = errorCount;
 
         // 3. 建立 100% 滿版橫向手風琴長條元件
         const strip = document.createElement('div');
@@ -2662,8 +2657,8 @@ function renderWerReportToPanel3(alignmentReport, stats, currentParaNum = 1, bac
 // ══════════════════════════════════════════════════
 /**
  * 💡 整篇練習(whole)剛完成上傳、拿到後端「這一次上傳」的即時分析結果(result.wer_result)時呼叫。
- *    直接把 stats 裡的數值寫進總成績卡（werScoreText / werTotalWords / werErrorCount /
- *    werAvgNpvi / werAvgVarco），完全不經過 /get_project_total_report 的後端平均計算 —
+ *    直接把 stats 裡的數值寫進總成績卡（werScoreText / werFluencyScore100），
+ *    完全不經過 /get_project_total_report 的後端平均計算 —
  *    因為那支 API 目前無法正確辨識整篇錄音這一筆資料，算出來的平均值永遠是 0。
  *    下方段落列表也只會渲染這一筆「整篇朗讀」的手風琴卡，不會有其他段落殘影。
  */
@@ -2681,13 +2676,11 @@ function renderWholeReportDirectly(stats, alignmentReport, backendAudioUrl) {
         const totalWords = stats.total_ref_words ?? 0;
         const npvi = (stats.npvi != null) ? parseFloat(stats.npvi).toFixed(2) : '0.00';
         const varco = (stats.varco != null) ? parseFloat(stats.varco).toFixed(2) : '0.00';
+        const overallFluencyScore = stats.overall_fluency_score_100 != null ? Math.round(stats.overall_fluency_score_100) : '—';
 
-        // 1. 直接改寫總成績卡的五個數字，不做任何平均運算
+        // 1. 直接改寫總成績卡的兩個數字，不做任何平均運算
         if (document.getElementById('werScoreText')) document.getElementById('werScoreText').innerText = werPct;
-        if (document.getElementById('werTotalWords')) document.getElementById('werTotalWords').innerText = totalWords;
-        if (document.getElementById('werErrorCount')) document.getElementById('werErrorCount').innerText = errorCount;
-        if (document.getElementById('werAvgNpvi')) document.getElementById('werAvgNpvi').innerText = npvi;
-        if (document.getElementById('werAvgVarco')) document.getElementById('werAvgVarco').innerText = varco;
+        if (document.getElementById('werFluencyScore100')) document.getElementById('werFluencyScore100').innerText = overallFluencyScore;
 
         const bannerTitle = document.getElementById('scoreBannerTitle');
         if (bannerTitle) bannerTitle.innerHTML = '📊 整篇朗讀流暢度結算看板';
@@ -2698,9 +2691,12 @@ function renderWholeReportDirectly(stats, alignmentReport, backendAudioUrl) {
         container.innerHTML = '';
 
         const stripId = `strip-whole-${Date.now()}`;
-        const counts = [
-            stats.repair_repetition || 0, stats.repair_attempt || 0, stats.repair_restart || 0,
-            stats.substitutions || 0, stats.deletions || 0, stats.insertions || 0
+        // 💡 雷達圖改成四個維度（0~5分，來自 Ollama 評分），不再是錯誤類型次數
+        const radarScores = [
+            stats.score_completeness || 0,
+            stats.score_accuracy || 0,
+            stats.score_fluency || 0,
+            stats.score_grammar || 0
         ];
 
         const strip = document.createElement('div');
@@ -2783,10 +2779,10 @@ function renderWholeReportDirectly(stats, alignmentReport, backendAudioUrl) {
                     new Chart(canvas.getContext('2d'), {
                         type: 'radar',
                         data: {
-                            labels: ['Repetition', 'Attempt', 'Restart', 'Substitutions', 'Deletions', 'Insertions'],
-                            datasets: [{ label: '發生次數', data: counts, backgroundColor: 'rgba(230, 57, 70, 0.2)', borderColor: '#e63946', pointBackgroundColor: '#e63946', borderWidth: 2 }]
+                            labels: ['完整度', '準確度', '流利度', '語法'],
+                            datasets: [{ label: '評分 (0-5)', data: radarScores, backgroundColor: 'rgba(230, 57, 70, 0.2)', borderColor: '#e63946', pointBackgroundColor: '#e63946', borderWidth: 2 }]
                         },
-                        options: { responsive: true, maintainAspectRatio: false, scales: { r: { beginAtZero: true, ticks: { stepSize: 1, backdropColor: 'transparent' }, pointLabels: { font: { size: 11, weight: 'bold' }, color: '#475569' } } }, plugins: { legend: { display: false } } }
+                        options: { responsive: true, maintainAspectRatio: false, scales: { r: { beginAtZero: true, min: 0, max: 5, ticks: { stepSize: 1, backdropColor: 'transparent' }, pointLabels: { font: { size: 12, weight: 'bold' }, color: '#475569' } } }, plugins: { legend: { display: false } } }
                     });
                 }
             }
@@ -2962,10 +2958,12 @@ function renderFluencyBulletBar(label, value, mean, std, barColor) {
     const low = mean - std;
     const high = mean + std;
     const passed = value >= low && value <= high;
-    const maxScale = Math.max(high * 1.4, value * 1.15, 10);
-    const toPct = (v) => Math.max(0, Math.min((v / maxScale) * 100, 100));
+    const maxScale = Math.max(high * 1.3, value * 1.15, 10);
+    // 💡 留一點左右邊界(2%~98%)，避免刻度線剛好卡在圖表最邊緣、文字被裁掉一半
+    const toPct = (v) => Math.max(2, Math.min((v / maxScale) * 100, 98));
     const valuePct = toPct(value);
     const lowPct = toPct(low);
+    const meanPct = toPct(mean);
     const highPct = toPct(high);
     const bandWidthPct = Math.max(highPct - lowPct, 0);
     const statusHtml = passed
@@ -2973,31 +2971,51 @@ function renderFluencyBulletBar(label, value, mean, std, barColor) {
         : `<span style="color:#e63946; font-weight:bold;">✗ 未過關</span>`;
 
     return `
-        <div>
-            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px; font-size:0.85rem; font-weight:bold; color:#333; margin-bottom:6px;">
-                <span>${label}</span>
-                <span>實測: <span style="color:${barColor};">${value.toFixed(2)}</span>　標準: ${mean.toFixed(2)} ± ${std.toFixed(2)}　${statusHtml}</span>
+        <div style="margin-bottom: 4px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 26px;">
+                <span style="font-size:0.85rem; font-weight:bold; color:#333;">${label}</span>
+                ${statusHtml}
             </div>
-            <div style="position:relative; width:100%; height:24px; background:#e2e8f0; border-radius:12px; overflow:hidden;">
-                <div style="position:absolute; left:${lowPct}%; width:${bandWidthPct}%; top:0; bottom:0; background:rgba(255,0,0,0.08); z-index:5;"></div>
-                <div style="width:${valuePct}%; height:100%; background:${barColor}; transition:width 1s;"></div>
-                <div style="position:absolute; left:${lowPct}%; top:0; bottom:0; width:3px; background:#ff0000; z-index:10;"></div>
-                <div style="position:absolute; left:${highPct}%; top:0; bottom:0; width:3px; background:#ff0000; z-index:10;"></div>
+
+            <div style="position:relative; padding-top: 24px; padding-bottom: 40px;">
+                <!-- 💡 實測值：箭頭 + 數字，標在填色長條的頂端 -->
+                <div style="position:absolute; left:${valuePct}%; top:0; transform:translateX(-50%); display:flex; flex-direction:column; align-items:center; z-index:10; white-space:nowrap;">
+                    <span style="font-size:0.8rem; font-weight:bold; color:${barColor};">實測 ${value.toFixed(1)}</span>
+                    <span style="color:${barColor}; font-size:1rem; line-height:1; margin-top:1px;">|</span>
+                </div>
+
+                <!-- 💡 主軌道：從 0 一路實心填色到實測值的位置，不是只有一個標記點 -->
+                <div style="position:relative; width:100%; height:14px; background:#e2e8f0; border-radius:8px; overflow:hidden;">
+                    <div style="width:${valuePct}%; height:100%; background:${barColor}; transition:width 1s;"></div>
+                </div>
+
+                <!-- 💡 標準範圍：外框方框改成紅色，不用底色填滿，直接把下限到上限框起來 -->
+                <div style="position:absolute; left:${lowPct}%; width:${bandWidthPct}%; top:24px; height:14px; border:2px solid #e63946; border-radius:6px; box-sizing:border-box; pointer-events:none;"></div>
+
+                <!-- 💡 標準值(平均)在框內的確切位置，用一條直線標出來 -->
+                <div style="position:absolute; left:${meanPct}%; top:22px; width:2px; height:18px; background:#e63946; pointer-events:none;"></div>
+
+                <!-- 💡 下限 / 標準 / 上限：只顯示數字，不顯示文字說明，位置在方框下方留出間距，不會跟軌道疊到 -->
+                <div style="position:absolute; left:${lowPct}%; top:44px; transform:translateX(-50%); font-size:0.78rem; color:#64748b; font-weight:bold; white-space:nowrap;">${low.toFixed(1)}</div>
+                <div style="position:absolute; left:${meanPct}%; top:44px; transform:translateX(-50%); font-size:0.78rem; color:#1f2937; font-weight:bold; white-space:nowrap;">${mean.toFixed(1)}</div>
+                <div style="position:absolute; left:${highPct}%; top:44px; transform:translateX(-50%); font-size:0.78rem; color:#64748b; font-weight:bold; white-space:nowrap;">${high.toFixed(1)}</div>
             </div>
         </div>
     `;
 }
 
 function renderChunkTranscriptRow(layout, targetCategory) {
+    // 💡 「重新開始」這個類別，同時涵蓋 Repair_Restart 跟 Repair_Replacement 兩種原始類別
+    //    （這是原本就有的設計：replacement 屬於一種特殊的 restart，兩者合併算同一個按鈕）
     const targetCategoryMap = {
-        'repair_repetition': 'Repair_Repetition',
-        'repair_attempt': 'Repair_Attempt',
-        'repair_restart': 'Repair_Restart',
-        'substitutions': 'Substitute',
-        'deletions': 'Delete',
-        'insertions': 'Insert'
+        'repair_repetition': ['repair_repetition'],
+        'repair_attempt': ['repair_attempt'],
+        'repair_restart': ['repair_restart', 'repair_replacement'],
+        'substitutions': ['substitute'],
+        'deletions': ['delete'],
+        'insertions': ['insert']
     };
-    const normalizedTarget = targetCategory ? (targetCategoryMap[targetCategory] || targetCategory) : null;
+    const normalizedTargets = targetCategory ? (targetCategoryMap[targetCategory] || [targetCategory.toLowerCase()]) : null;
 
     return layout.map((c, i) => {
         // 💡 核心修正：顏色分組改用 chunkIndex（這個字屬於第幾個句子分段），
@@ -3009,17 +3027,17 @@ function renderChunkTranscriptRow(layout, targetCategory) {
         const hypColorDefault = '#6b7280';
 
         const wordsHtml = (c.items || []).map(item => {
-            const cat = (item.Category || item.category || '').toString();
+            const cat = (item.Category || item.category || '').toString().toLowerCase();
             const ref = (item.Reference || item.reference || '—').trim();
             let hyp = (item.Hypothesis || item.hypothesis || '—').trim();
-            const isTargetError = normalizedTarget && cat.toLowerCase() === normalizedTarget.toLowerCase();
+            const isTargetError = normalizedTargets && normalizedTargets.includes(cat);
 
             let hypStyle = `color: ${hypColorDefault}; font-weight: 500;`;
             let displayHyp = hyp;
 
             if (isTargetError) {
                 hypStyle = 'color: #e63946; font-weight: 800; background: #fee2e2; padding: 2px 4px; border-radius: 4px; border-bottom: 2px solid #e63946;';
-                if (cat.toLowerCase() === 'delete') displayHyp = 'NULL';
+                if (cat === 'delete') displayHyp = 'NULL';
             } else if (hyp === '—' || !hyp) {
                 displayHyp = '-';
                 hypStyle = 'color: #6b7280; opacity: 0.6;';
@@ -3045,6 +3063,62 @@ function renderChunkTranscriptRow(layout, targetCategory) {
             </div>
         `;
     }).join('');
+}
+
+/**
+ * 💡 統計整段錄音裡，每一種錯誤類別各發生了幾次。
+ *    用於按鈕文字後面顯示「這個類別總共有幾個字錯」，
+ *    避免使用者點了 0 次的類別、畫面完全沒反應，誤以為系統壞了。
+ *    「重新開始」這個類別統計時，會把 Repair_Restart 跟 Repair_Replacement 兩種都算進去。
+ */
+function countErrorsByCategory(alignmentReport) {
+    const categoryGroups = {
+        repair_repetition: ['repair_repetition'],
+        repair_attempt: ['repair_attempt'],
+        repair_restart: ['repair_restart', 'repair_replacement'],
+        substitutions: ['substitute'],
+        deletions: ['delete'],
+        insertions: ['insert']
+    };
+    const counts = { repair_repetition: 0, repair_attempt: 0, repair_restart: 0, substitutions: 0, deletions: 0, insertions: 0 };
+
+    (alignmentReport || []).forEach(item => {
+        const cat = (item.Category || item.category || '').toString().toLowerCase();
+        for (const key in categoryGroups) {
+            if (categoryGroups[key].includes(cat)) {
+                counts[key]++;
+                break;
+            }
+        }
+    });
+
+    return counts;
+}
+
+/**
+ * 💡 在目前的排版陣列(layout)裡，找出「第一個」包含指定錯誤類別的位置索引(i)。
+ *    找不到就回傳 -1。用來實現「點擊錯誤類別 → 自動跳到第一個命中的錯誤」。
+ */
+function findFirstErrorLayoutIndex(layout, errorType) {
+    const targetCategoryMap = {
+        'repair_repetition': ['repair_repetition'],
+        'repair_attempt': ['repair_attempt'],
+        'repair_restart': ['repair_restart', 'repair_replacement'],
+        'substitutions': ['substitute'],
+        'deletions': ['delete'],
+        'insertions': ['insert']
+    };
+    const targets = targetCategoryMap[errorType] || [errorType.toLowerCase()];
+
+    for (let i = 0; i < layout.length; i++) {
+        const items = layout[i].items || [];
+        const hasMatch = items.some(item => {
+            const cat = (item.Category || item.category || '').toString().toLowerCase();
+            return targets.includes(cat);
+        });
+        if (hasMatch) return i;
+    }
+    return -1;
 }
 
 /**
@@ -3107,23 +3181,25 @@ function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl, w
     if (cleanAudioUrl && !cleanAudioUrl.startsWith('/') && !cleanAudioUrl.startsWith('http')) cleanAudioUrl = '/' + cleanAudioUrl;
     if (cleanAudioUrl) cleanAudioUrl += (cleanAudioUrl.includes('?') ? '&' : '?') + 't=' + Date.now();
 
+    const errorCounts = countErrorsByCategory(alignmentReport);
+
     return `
         <div class="chunk-audio-widget" id="${stripId}-chunkwidget"
              data-layout='${layoutJson}' data-raw-groups='${rawGroupsJson}' data-chunks='${chunkTimesJson}'
              data-audio-url="${cleanAudioUrl}" data-base-px-per-sec="${basePxPerSec}" data-active-category="">
             <div style="font-size: 0.9rem; font-weight: bold; color: #475569; margin-bottom: 8px;">
-                🎵 錄音回放（顏色 = 逐句分段，逐字精準對齊，上下紅線+高亮隨播放即時移動）：
+                🎵 錄音回放
             </div>
 
             <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom: 10px;">
                 <button id="${stripId}-playbtn" type="button" style="padding:6px 16px; border:none; background:#e63946; color:#fff; border-radius:20px; font-weight:bold; cursor:pointer; font-size:0.85rem; white-space:nowrap;">▶ 播放</button>
                 <div style="width:1px; height:22px; background:#e2e8f0; margin: 0 4px;"></div>
-                <button class="wer-filter-btn-chunked" onclick="window.switchWerFilterChunked(this, 'repair_repetition', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Repetition</button>
-                <button class="wer-filter-btn-chunked" onclick="window.switchWerFilterChunked(this, 'repair_attempt', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Attempt</button>
-                <button class="wer-filter-btn-chunked" onclick="window.switchWerFilterChunked(this, 'repair_restart', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Restart</button>
-                <button class="wer-filter-btn-chunked" onclick="window.switchWerFilterChunked(this, 'substitutions', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Substitutions</button>
-                <button class="wer-filter-btn-chunked" onclick="window.switchWerFilterChunked(this, 'deletions', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Deletions</button>
-                <button class="wer-filter-btn-chunked" onclick="window.switchWerFilterChunked(this, 'insertions', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Insertions</button>
+                <button class="wer-filter-btn-chunked" onclick="window.switchWerFilterChunked(this, 'repair_repetition', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">重複 (${errorCounts.repair_repetition})</button>
+                <button class="wer-filter-btn-chunked" onclick="window.switchWerFilterChunked(this, 'repair_attempt', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">嘗試修正 (${errorCounts.repair_attempt})</button>
+                <button class="wer-filter-btn-chunked" onclick="window.switchWerFilterChunked(this, 'repair_restart', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">重新開始 (${errorCounts.repair_restart})</button>
+                <button class="wer-filter-btn-chunked" onclick="window.switchWerFilterChunked(this, 'substitutions', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">替換 (${errorCounts.substitutions})</button>
+                <button class="wer-filter-btn-chunked" onclick="window.switchWerFilterChunked(this, 'deletions', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">刪除 (${errorCounts.deletions})</button>
+                <button class="wer-filter-btn-chunked" onclick="window.switchWerFilterChunked(this, 'insertions', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">插入 (${errorCounts.insertions})</button>
             </div>
 
             <div style="display:flex; align-items:center; gap:10px; margin-bottom: 10px; flex-wrap: wrap;">
@@ -3172,6 +3248,17 @@ window.switchWerFilterChunked = function(btn, errorType, stripId) {
     const transcriptRow = document.getElementById(`${stripId}-transcript`);
     if (transcriptRow) {
         transcriptRow.innerHTML = renderChunkTranscriptRow(layout, errorType);
+    }
+
+    // 💡 自動捲動到「第一個」命中這個錯誤類別的位置，波形跟逐字稿是同一個捲動容器，
+    //    一次捲動兩者都會一起移動過去，不用使用者自己手動找。
+    const firstIdx = findFirstErrorLayoutIndex(layout, errorType);
+    const scrollWrap = document.getElementById(`${stripId}-scrollwrap`);
+    if (firstIdx >= 0 && scrollWrap && layout[firstIdx]) {
+        const targetLeft = Math.max(layout[firstIdx].left - 60, 0); // 往前留一點邊界，不要貼死在最左邊
+        scrollWrap.scrollTo({ left: targetLeft, behavior: 'smooth' });
+    } else if (firstIdx === -1) {
+        showToast('這個類別目前沒有任何錯誤 🎉');
     }
 };
 
@@ -3391,31 +3478,18 @@ function renderMultipleParagraphsReport(paragraphList, globalStats, mode = 'segm
             document.getElementById('werScoreText').innerText =
                 effectiveGlobalStats ? (effectiveGlobalStats.wer_average * 100).toFixed(1) + '%' : '0.0%';
         }
-        if (document.getElementById('werTotalWords')) {
-            document.getElementById('werTotalWords').innerText =
-                effectiveGlobalStats ? effectiveGlobalStats.total_words : '0';
-        }
-        if (document.getElementById('werErrorCount')) {
-            document.getElementById('werErrorCount').innerText =
-                effectiveGlobalStats ? effectiveGlobalStats.total_errors : '0';
-        }
-        if (document.getElementById('werAvgNpvi')) {
-            document.getElementById('werAvgNpvi').innerText =
-                (effectiveGlobalStats && effectiveGlobalStats.average_npvi != null)
-                    ? parseFloat(effectiveGlobalStats.average_npvi).toFixed(2) : '0.00';
-        }
-        if (document.getElementById('werAvgVarco')) {
-            document.getElementById('werAvgVarco').innerText =
-                (effectiveGlobalStats && effectiveGlobalStats.average_varco != null)
-                    ? parseFloat(effectiveGlobalStats.average_varco).toFixed(2) : '0.00';
+        if (document.getElementById('werFluencyScore100')) {
+            document.getElementById('werFluencyScore100').innerText =
+                (effectiveGlobalStats && effectiveGlobalStats.overall_fluency_score_100 != null)
+                    ? Math.round(effectiveGlobalStats.overall_fluency_score_100) : '—';
         }
 
         // 💡 順手把標題文字也改一下，whole 模式不叫「Total 平均」
         const bannerTitle = document.getElementById('scoreBannerTitle');
         if (bannerTitle) {
             bannerTitle.innerHTML = isWhole
-                ? '📊 整篇朗讀流暢度結算看板'
-                : '📊 總體朗讀流暢度結算看板 (Total 平均)';
+                ? '📊 整篇式練習 朗讀結算'
+                : '📊 分段式練習 朗讀結算';
         }
 
         const container = document.getElementById('werParagraphsContainer');
@@ -3491,16 +3565,12 @@ function renderMultipleParagraphsReport(paragraphList, globalStats, mode = 'segm
             body.style.cssText = 'padding: 24px; display: none; background: #ffffff; border-top: 1px solid #edf2f7; flex-direction: column; gap: 24px;';
 
             if (hasRecorded) {
-                // 🚀 【核心修正 3：精準抓取 raw_wer_output.statistics 給雷達圖用】
-                const rawWer = extendedReport.raw_wer_output || {};
-                const stats = rawWer.statistics || {}; 
-                const counts = [
-                    stats.repair_repetition || 0,
-                    stats.repair_attempt || 0,
-                    stats.repair_restart || 0,
-                    stats.substitutions || 0,
-                    stats.deletions || 0,
-                    stats.insertions || 0
+                // 🚀 雷達圖改成四個維度（0~5分，來自 Ollama 評分），資料直接來自 para 物件（DB 欄位）
+                const radarScores = [
+                    para.score_completeness || 0,
+                    para.score_accuracy || 0,
+                    para.score_fluency || 0,
+                    para.score_grammar || 0
                 ];
 
                 const actualNpviNum = parseFloat(singleParaNpvi) || 0;
@@ -3510,7 +3580,7 @@ function renderMultipleParagraphsReport(paragraphList, globalStats, mode = 'segm
                     <div style="display: flex; gap: 24px; width: 100%; flex-wrap: wrap;">
                         <!-- 左側：WER 錯誤雷達圖 -->
                         <div style="flex: 1; min-width: 300px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; align-items: center;">
-                            <div style="font-size: 0.95rem; font-weight: bold; color: #475569; margin-bottom: 12px; align-self: flex-start;">🕸️ 發音錯誤面向分析</div>
+                            <div style="font-size: 0.95rem; font-weight: bold; color: #475569; margin-bottom: 12px; align-self: flex-start;">🕸️ 朗讀整體面向分析</div>
                             <div style="position: relative; width: 100%; height: 220px;">
                                 <canvas class="radar-canvas"></canvas>
                             </div>
@@ -3518,9 +3588,9 @@ function renderMultipleParagraphsReport(paragraphList, globalStats, mode = 'segm
 
                         <!-- 右側：nPVI / Varco 子彈圖 -->
                         <div style="flex: 1; min-width: 300px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; justify-content: center; gap: 20px;">
-                            <div style="font-size: 0.95rem; font-weight: bold; color: #475569; margin-bottom: 4px;">🎯 流暢度達標分析 (Bullet Chart)</div>
-                            ${renderFluencyBulletBar('nPVI 節奏指數', actualNpviNum, NPVI_SYL_MEAN, NPVI_SYL_STD, '#3b82f6')}
-                            ${renderFluencyBulletBar('Varco 語速變異', actualVarcoNum, VARCO_SYL_MEAN, VARCO_SYL_STD, '#10b981')}
+                            <div style="font-size: 0.95rem; font-weight: bold; color: #475569; margin-bottom: 4px;">🎯 口語流暢分析</div>
+                            ${renderFluencyBulletBar('nPVI 相鄰語速變異', actualNpviNum, NPVI_SYL_MEAN, NPVI_SYL_STD, '#3b82f6')}
+                            ${renderFluencyBulletBar('Varco 整體語速變異', actualVarcoNum, VARCO_SYL_MEAN, VARCO_SYL_STD, '#10b981')}
                         </div>
                     </div>
                 `;
@@ -3548,10 +3618,10 @@ function renderMultipleParagraphsReport(paragraphList, globalStats, mode = 'segm
                             new Chart(canvas.getContext('2d'), {
                                 type: 'radar',
                                 data: {
-                                    labels: ['Repetition', 'Attempt', 'Restart', 'Substitutions', 'Deletions', 'Insertions'],
+                                    labels: ['完整度', '準確度', '流利度', '語法'],
                                     datasets: [{
-                                        label: '發生次數',
-                                        data: counts,
+                                        label: '評分 (0-5)',
+                                        data: radarScores,
                                         backgroundColor: 'rgba(230, 57, 70, 0.2)',
                                         borderColor: '#e63946',
                                         pointBackgroundColor: '#e63946',
@@ -3564,8 +3634,10 @@ function renderMultipleParagraphsReport(paragraphList, globalStats, mode = 'segm
                                     scales: {
                                         r: {
                                             beginAtZero: true,
+                                            min: 0,
+                                            max: 5,
                                             ticks: { stepSize: 1, backdropColor: 'transparent' },
-                                            pointLabels: { font: { size: 11, weight: 'bold' }, color: '#475569' }
+                                            pointLabels: { font: { size: 12, weight: 'bold' }, color: '#475569' }
                                         }
                                     },
                                     plugins: { legend: { display: false } }
@@ -3595,17 +3667,11 @@ function renderMultipleParagraphsReport(paragraphList, globalStats, mode = 'segm
  * 用於切換到「尚未完成評分」的專案時，避免殘留上一篇文章的舊報告。
  */
 function _resetScorePanel() {
-    const scoreText    = document.getElementById('werScoreText');
-    const errorCountEl = document.getElementById('werErrorCount');
-    const totalWords   = document.getElementById('werTotalWords');
-    const avgNpvi      = document.getElementById('werAvgNpvi');
-    const avgVarco     = document.getElementById('werAvgVarco');
+    const scoreText     = document.getElementById('werScoreText');
+    const fluencyScore  = document.getElementById('werFluencyScore100');
 
     if (scoreText)    scoreText.textContent    = '0.0%';
-    if (errorCountEl) errorCountEl.textContent = '0';
-    if (totalWords)   totalWords.textContent   = '0';
-    if (avgNpvi)       avgNpvi.textContent      = '0.00';
-    if (avgVarco)       avgVarco.textContent     = '0.00';
+    if (fluencyScore) fluencyScore.textContent = '—';
 
     const container = document.getElementById('werParagraphsContainer');
     if (container) {

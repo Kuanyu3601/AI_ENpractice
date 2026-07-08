@@ -291,31 +291,18 @@
                 <div class="score-section" style="width: 100% !important; max-width: 1000px; margin: 0 auto; padding: 20px; display: flex; flex-direction: column; gap: 24px; box-sizing: border-box;">
                     <div class="wer-score-banner" style="background: linear-gradient(135deg, #fff5f5 0%, #ffe3e3 100%); border: 2px solid #ffa3a3; padding: 22px 26px; border-radius: 16px; box-shadow: 0 4px 15px rgba(230, 57, 70, 0.05); width: 100% !important; box-sizing: border-box; margin-top: 20px;">
                         <h2 id="scoreBannerTitle" style="color: #e63946; margin: 0 0 18px 0; font-size: 1.2rem; text-align: left; border-left: 4px solid #e63946; padding-left: 8px; font-weight: bold;">
-                            📊 總體朗讀流暢度結算看板 (Total 平均)
+                            總體朗讀結算
                         </h2>
 
-                        <div style="display: flex; gap: 16px; align-items: center; justify-content: space-between; flex-wrap: wrap;">
-                            <div style="background: white; padding: 12px 10px; border-radius: 10px; border: 1px solid #ffd1d1; flex: 1; min-width: 140px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
-                                <span style="color: #666; font-size: 0.8rem; display: block;">總平均詞錯率 (WER)</span>
-                                <strong id="werScoreText" style="color: #e63946; font-size: 2.2rem; display: block; margin-top: 5px; font-weight: bold;">0.0%</strong>
-                            </div>
-                            <div style="background: white; padding: 12px 10px; border-radius: 10px; border: 1px solid #ffd1d1; flex: 1; min-width: 110px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
-                                <span style="color: #666; font-size: 0.8rem; display: block;">總錯誤標記數</span>
-                                <strong id="werErrorCount" style="color: #fb923c; font-size: 1.8rem; display: block; margin-top: 5px; font-weight: bold;">0</strong>
-                            </div>
-                            <div style="background: white; padding: 12px 10px; border-radius: 10px; border: 1px solid #ffd1d1; flex: 1; min-width: 110px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
-                                <span style="color: #666; font-size: 0.8rem; display: block;">總讀出字數</span>
-                                <strong id="werTotalWords" style="color: #333; font-size: 1.8rem; display: block; margin-top: 5px; font-weight: bold;">0</strong>
+                        <div style="display: flex; gap: 16px; align-items: center; justify-content: center; flex-wrap: wrap;">
+                            <div style="background: white; padding: 20px 24px; border-radius: 10px; border: 1px solid #ffd1d1; flex: 1; min-width: 200px; max-width: 320px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
+                                <span style="color: #666; font-size: 0.85rem; display: block;">詞錯率 WER</span>
+                                <strong id="werScoreText" style="color: #e63946; font-size: 2.4rem; display: block; margin-top: 8px; font-weight: bold;">0.0%</strong>
                             </div>
 
-                            <div style="background: white; padding: 12px 10px; border-radius: 10px; border: 1px solid #ffd1d1; flex: 1; min-width: 110px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
-                                <span style="color: #666; font-size: 0.8rem; display: block;">平均 nPVI</span>
-                                <strong id="werAvgNpvi" style="color: #2563eb; font-size: 1.8rem; display: block; margin-top: 5px; font-weight: bold;">0.00</strong>
-                            </div>
-
-                            <div style="background: white; padding: 12px 10px; border-radius: 10px; border: 1px solid #ffd1d1; flex: 1; min-width: 110px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
-                                <span style="color: #666; font-size: 0.8rem; display: block;">平均 Varco</span>
-                                <strong id="werAvgVarco" style="color: #10b981; font-size: 1.8rem; display: block; margin-top: 5px; font-weight: bold;">0.00</strong>
+                            <div style="background: white; padding: 20px 24px; border-radius: 10px; border: 1px solid #bfdbfe; flex: 1; min-width: 200px; max-width: 320px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
+                                <span style="color: #666; font-size: 0.85rem; display: block;">流暢度綜合評分 (0-100)</span>
+                                <strong id="werFluencyScore100" style="color: #2563eb; font-size: 2.4rem; display: block; margin-top: 8px; font-weight: bold;">—</strong>
                             </div>
                         </div>
                     </div>
