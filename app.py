@@ -301,29 +301,45 @@ def call_ollama_score_errors(wer_stats, pause_count=0):
     repair_replacement = wer_stats.get('repair_replacement', 0)
     repair_restart = wer_stats.get('repair_restart', 0)
     total_errors = wer_stats.get('total_errors', 0)
-    total_ref_words = wer_stats.get('total_ref_words', 1)
+    total_ref_words = wer_stats.get('total_ref_words', 1) or 1
+
+    # 💡 事先幫模型算好「錯誤數 / 總字數」的比例，直接告訴它落在哪個級距對應幾分，
+    #    不要讓模型自己憑感覺判斷——本地小模型很容易在這種開放式量化評分上
+    #    只給極端值(0分或滿分)，給它明確的公式/級距表可以大幅改善這個問題。
+    completeness_error_count = deletions + insertions
+    completeness_ratio = completeness_error_count / total_ref_words
+    accuracy_ratio = substitutions / total_ref_words
+    repair_total = repair_attempt + repair_repetition + repair_replacement + repair_restart
+    fluency_issue_count = repair_total + pause_count
+
+    def _ratio_to_band(ratio):
+        if ratio == 0: return "0%（完全沒有這類錯誤）"
+        if ratio <= 0.05: return f"{ratio*100:.1f}%（很輕微，5%以內）"
+        if ratio <= 0.15: return f"{ratio*100:.1f}%（輕度，5~15%）"
+        if ratio <= 0.30: return f"{ratio*100:.1f}%（中度，15~30%）"
+        return f"{ratio*100:.1f}%（嚴重，超過30%）"
 
     prompt = f"""你是一位英語朗讀評分老師。根據以下這位學生朗讀時的錯誤統計數字，
-針對三個面向各給 0 到 5 分（可以有小數點一位，例如 3.5），5 分代表完美、0 分代表非常差：
+針對三個面向各給 0 到 5 分（務必包含小數點一位，例如 1.5、2.8、4.2，不是只能選整數的 0 或 5）。
 
-1. 完整度 (completeness)：根據「漏字數(deletions)」與「贅字數(insertions)」評分，數字相對於總字數的比例越高，分數越低。
-2. 準確度 (accuracy)：根據「替換錯誤數(substitutions)」評分，數字相對於總字數的比例越高，分數越低。
-3. 流利度 (fluency)：根據「修復行為次數」(repair_attempt + repair_repetition + repair_replacement + repair_restart) 與「停頓次數(pause_count)」評分，次數越多分數越低。
+請嚴格按照下面這個級距對照表來評分，不要自己另外判斷：
+- 問題比例 0%　　　　　→ 5.0 分
+- 問題比例 0~5%　　　　→ 4.0~4.9 分（比例越高分數越接近 4.0）
+- 問題比例 5~15%　　　 → 3.0~3.9 分
+- 問題比例 15~30%　　　→ 1.5~2.9 分
+- 問題比例超過 30%　　 → 0~1.4 分
 
-統計數字：
-- 漏字數 (deletions): {deletions}
-- 贅字數 (insertions): {insertions}
-- 替換錯誤數 (substitutions): {substitutions}
-- 嘗試修復 (repair_attempt): {repair_attempt}
-- 重複 (repair_repetition): {repair_repetition}
-- 替換修復 (repair_replacement): {repair_replacement}
-- 重新開始 (repair_restart): {repair_restart}
-- 停頓次數 (pause_count): {pause_count}
-- 總錯誤數 (total_errors): {total_errors}
-- 課文總字數 (total_ref_words): {total_ref_words}
+三個面向與它們各自的「問題比例」：
 
-請「只」回傳一個 JSON 物件，不要有任何其他文字說明或 markdown 標記，格式如下：
-{{"completeness": 0, "accuracy": 0, "fluency": 0}}
+1. 完整度 (completeness)：漏字數 + 贅字數 = {completeness_error_count}，佔總字數 {total_ref_words} 的比例是 {_ratio_to_band(completeness_ratio)}
+2. 準確度 (accuracy)：替換錯誤數 = {substitutions}，佔總字數 {total_ref_words} 的比例是 {_ratio_to_band(accuracy_ratio)}
+3. 流利度 (fluency)：修復行為次數({repair_attempt}+{repair_repetition}+{repair_replacement}+{repair_restart}={repair_total}) + 停頓次數({pause_count}) = {fluency_issue_count} 次，
+   請對照這個次數表評分：0次=5.0分，1~2次=3.5~4.5分，3~5次=2.0~3.4分，6次以上=0~1.9分
+
+請根據上面的級距對照表，各給一個「有小數點」的分數（不要只給整數 0 或 5，除非比例真的剛好是 0%）。
+
+請「只」回傳一個 JSON 物件，不要有任何其他文字說明或 markdown 標記，格式如下（下面是格式範例，不是建議分數）：
+{{"completeness": 3.7, "accuracy": 4.2, "fluency": 2.8}}
 """
 
     result = _call_ollama(prompt)

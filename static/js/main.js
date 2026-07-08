@@ -1556,6 +1556,19 @@ function newSession() {
 // ══════════════════════════════════════════════════
 //  TOAST
 // ══════════════════════════════════════════════════
+/**
+ * 💡 把 WER(詞錯率) 換算成正面呈現的「詞正確率」文字，公式：100% - WER% 。
+ *    如果 WER 超過 100%（極端情況，例如插入字太多導致錯誤數比總字數還多），
+ *    正確率一律顯示 0%，不會出現負數。
+ * @param {number} werRatio - WER 比例值 (0~1 之間，例如 0.42 代表 42%)
+ * @returns {string} 例如 "58.0%"
+ */
+function werToAccuracyPercentText(werRatio) {
+    if (werRatio == null || isNaN(werRatio)) return '0.0%';
+    const accuracy = 100 - (werRatio * 100);
+    return Math.max(accuracy, 0).toFixed(1) + '%';
+}
+
 function showToast(msg) {
     const t = document.getElementById('toast');
     t.textContent = msg;
@@ -2475,7 +2488,7 @@ function renderWerReportToPanel3(alignmentReport, stats, currentParaNum = 1, bac
 
         // 1. 綁定最下方大底座 Total 的統計數據 (單段上傳時先作為即時看板)
         if (document.getElementById('werScoreText')) {
-            document.getElementById('werScoreText').innerText = (stats.wer_repair_fluency * 100).toFixed(1) + '%';
+            document.getElementById('werScoreText').innerText = werToAccuracyPercentText(stats.wer_repair_fluency);
         }
 
         const container = document.getElementById('werParagraphsContainer');
@@ -2674,7 +2687,7 @@ function renderWholeReportDirectly(stats, alignmentReport, backendAudioUrl) {
             : ((stats.repair_repetition || 0) + (stats.repair_attempt || 0) + (stats.repair_restart || 0) +
                (stats.substitutions || 0) + (stats.deletions || 0) + (stats.insertions || 0));
 
-        const werPct = ((stats.wer_repair_fluency || 0) * 100).toFixed(1) + '%';
+        const werPct = werToAccuracyPercentText(stats.wer_repair_fluency || 0);
         const totalWords = stats.total_ref_words ?? 0;
         const npvi = (stats.npvi != null) ? parseFloat(stats.npvi).toFixed(2) : '0.00';
         const varco = (stats.varco != null) ? parseFloat(stats.varco).toFixed(2) : '0.00';
@@ -3382,12 +3395,32 @@ function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl, w
             <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom: 10px;">
                 <button id="${stripId}-playbtn" type="button" style="padding:6px 16px; border:none; background:#e63946; color:#fff; border-radius:20px; font-weight:bold; cursor:pointer; font-size:0.85rem; white-space:nowrap;">▶ 播放</button>
                 <div style="width:1px; height:22px; background:#e2e8f0; margin: 0 4px;"></div>
-                <button class="wer-filter-btn-chunked" onclick="window.switchWerFilterChunked(this, 'repair_repetition', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">重複 (${errorCounts.repair_repetition})</button>
-                <button class="wer-filter-btn-chunked" onclick="window.switchWerFilterChunked(this, 'repair_attempt', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">嘗試修正 (${errorCounts.repair_attempt})</button>
-                <button class="wer-filter-btn-chunked" onclick="window.switchWerFilterChunked(this, 'repair_restart', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">重新開始 (${errorCounts.repair_restart})</button>
-                <button class="wer-filter-btn-chunked" onclick="window.switchWerFilterChunked(this, 'substitutions', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">替換 (${errorCounts.substitutions})</button>
-                <button class="wer-filter-btn-chunked" onclick="window.switchWerFilterChunked(this, 'deletions', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">刪除 (${errorCounts.deletions})</button>
-                <button class="wer-filter-btn-chunked" onclick="window.switchWerFilterChunked(this, 'insertions', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">插入 (${errorCounts.insertions})</button>
+
+                <!-- 💡 完整度：刪除 + 插入，綠色底框 -->
+                <div style="border:2px solid #16a34a; border-radius:10px; padding:4px 8px 6px; background:#f0fdf4; display:flex; flex-direction:column; gap:4px;">
+                    <span style="font-size:0.65rem; font-weight:bold; color:#16a34a;">完整度</span>
+                    <div style="display:flex; gap:6px;">
+                        <button class="wer-filter-btn-chunked" data-original-bg="#fff" data-original-color="#16a34a" onclick="window.switchWerFilterChunked(this, 'deletions', '${stripId}')" style="padding: 5px 12px; border:none; background: #fff; color: #16a34a; border-radius: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size:0.85rem;">刪除 (${errorCounts.deletions})</button>
+                        <button class="wer-filter-btn-chunked" data-original-bg="#fff" data-original-color="#16a34a" onclick="window.switchWerFilterChunked(this, 'insertions', '${stripId}')" style="padding: 5px 12px; border:none; background: #fff; color: #16a34a; border-radius: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size:0.85rem;">插入 (${errorCounts.insertions})</button>
+                    </div>
+                </div>
+
+                <!-- 💡 準確度：替換，藍色底框 -->
+                <div style="border:2px solid #2563eb; border-radius:10px; padding:4px 8px 6px; background:#eff6ff; display:flex; flex-direction:column; gap:4px;">
+                    <span style="font-size:0.65rem; font-weight:bold; color:#2563eb;">準確度</span>
+                    <button class="wer-filter-btn-chunked" data-original-bg="#fff" data-original-color="#2563eb" onclick="window.switchWerFilterChunked(this, 'substitutions', '${stripId}')" style="padding: 5px 12px; border:none; background: #fff; color: #2563eb; border-radius: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size:0.85rem;">替換 (${errorCounts.substitutions})</button>
+                </div>
+
+                <!-- 💡 流利度：重複 + 嘗試修正 + 重新開始，橘色底框 -->
+                <div style="border:2px solid #d97706; border-radius:10px; padding:4px 8px 6px; background:#fffbeb; display:flex; flex-direction:column; gap:4px;">
+                    <span style="font-size:0.65rem; font-weight:bold; color:#d97706;">流利度</span>
+                    <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                        <button class="wer-filter-btn-chunked" data-original-bg="#fff" data-original-color="#d97706" onclick="window.switchWerFilterChunked(this, 'repair_repetition', '${stripId}')" style="padding: 5px 12px; border:none; background: #fff; color: #d97706; border-radius: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size:0.85rem;">重複 (${errorCounts.repair_repetition})</button>
+                        <button class="wer-filter-btn-chunked" data-original-bg="#fff" data-original-color="#d97706" onclick="window.switchWerFilterChunked(this, 'repair_attempt', '${stripId}')" style="padding: 5px 12px; border:none; background: #fff; color: #d97706; border-radius: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size:0.85rem;">嘗試修正 (${errorCounts.repair_attempt})</button>
+                        <button class="wer-filter-btn-chunked" data-original-bg="#fff" data-original-color="#d97706" onclick="window.switchWerFilterChunked(this, 'repair_restart', '${stripId}')" style="padding: 5px 12px; border:none; background: #fff; color: #d97706; border-radius: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size:0.85rem;">重新開始 (${errorCounts.repair_restart})</button>
+                    </div>
+                </div>
+
                 <div style="width:1px; height:22px; background:#e2e8f0; margin: 0 4px;"></div>
                 <button class="wer-filter-btn-chunked" onclick="window.switchWerFilterChunked(this, 'fluency', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;" title="按句子比對 nPVI/Varco 標準範圍：黃色=部分不合格，紅色=兩項都不合格，點擊會語音播放整體評語">流暢度 (${fluencyFlaggedCount})</button>
                 <span id="${stripId}-replay-icon" onclick="window.replayLastFeedback('${stripId}')" title="重播剛剛的語音評語" style="display:none; cursor:pointer; font-size:1.1rem; padding:2px 6px;">🔁</span>
@@ -3425,10 +3458,13 @@ window.switchWerFilterChunked = function(btn, errorType, stripId) {
     if (!widget) return;
 
     widget.querySelectorAll('.wer-filter-btn-chunked').forEach(b => {
-        b.style.background = '#f1f5f9';
-        b.style.color = '#475569';
+        const originalBg = b.dataset.originalBg || '#f1f5f9';
+        const originalColor = b.dataset.originalColor || '#475569';
+        b.style.background = originalBg;
+        b.style.color = originalColor;
     });
-    btn.style.background = '#e63946';
+    const activeColor = btn.dataset.originalColor || '#e63946';
+    btn.style.background = activeColor;
     btn.style.color = '#fff';
 
     // 💡 記住目前選取的篩選類別，縮放滑桿重繪逐字稿列時要保留這個篩選狀態
@@ -3763,7 +3799,7 @@ function renderMultipleParagraphsReport(paragraphList, globalStats, mode = 'segm
 
         if (document.getElementById('werScoreText')) {
             document.getElementById('werScoreText').innerText =
-                effectiveGlobalStats ? (effectiveGlobalStats.wer_average * 100).toFixed(1) + '%' : '0.0%';
+                effectiveGlobalStats ? werToAccuracyPercentText(effectiveGlobalStats.wer_average) : '0.0%';
         }
         if (document.getElementById('werFluencyScore100')) {
             document.getElementById('werFluencyScore100').innerText =

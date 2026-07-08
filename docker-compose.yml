@@ -18,6 +18,7 @@ services:
       - "8001:8000"
     volumes:
       - ./models:/root/.cache/whisper
+      - ./torch_cache:/root/.cache/torch 
 
   backend-npvi:   
     image: speech-api:v2  # 🚀【核心更換】：換成組員給的新網站映像檔名字
