@@ -267,7 +267,7 @@ def _call_ollama(prompt, timeout=60):
     except requests.exceptions.RequestException as conn_err:
         print(f"🚨 連線 Ollama 失敗: {conn_err}", flush=True)
         return None
-    except (json.JSONDecodeError, ValueError) as parse_err:
+    except ValueError as parse_err:
         print(f"🚨 解析 Ollama 回應 JSON 失敗: {parse_err}，原始回應: {raw_text[:300] if 'raw_text' in locals() else ''}", flush=True)
         return None
     except Exception as e:
@@ -379,6 +379,255 @@ NPVI_SYL_MEAN = 56.22   # 0.5622 * 100
 NPVI_SYL_STD = 13.35    # 0.1335 * 100
 VARCO_SYL_MEAN = 46.71  # 0.4671 * 100
 VARCO_SYL_STD = 9.33    # 0.0933 * 100
+
+
+def compute_sentence_fluency_status(chunks_list):
+    """
+    💡 對「每一句話」(NPVI 回傳的 chunk_results，每個 chunk 對應一句/一個語塊)
+       自己的 nPVI / Varco 值，個別判斷有沒有落在標準範圍內：
+
+       - 字數只有 1~2 個字的短句 -> 'skip'（數值不穩定甚至是 null，無法拿來判斷，直接忽略）
+       - nPVI、Varco 兩個都在標準範圍內  -> 'pass'  （這句話沒問題）
+       - 只有其中一個在範圍內            -> 'yellow'（這句話部分不流暢）
+       - 兩個都不在範圍內                -> 'red'   （這句話明顯不流暢）
+
+       依 xmin 排序，順序要跟前端 buildChunkedAudioBlock() 裡 sortedChunks 的
+       chunkIndex 分配方式完全一致（都是同樣依 xmin 排序），
+       這樣前端才能直接用 chunkIndex 當索引去對應到這裡算出來的狀態。
+
+    回傳：
+        (result, yellow_count, red_count)
+        result 是一個 list：
+        [
+            {"chunk_index": 0, "npvi": 48.5, "varco": 41.2, "npvi_pass": True, "varco_pass": True, "status": "pass"},
+            ...
+        ]
+    """
+    MIN_CHUNK_WORDS = 3  # 💡 字數 <= 2 的短句直接跳過判斷
+
+    sorted_chunks = sorted(chunks_list or [], key=lambda c: c.get('xmin', 0))
+
+    npvi_low = NPVI_SYL_MEAN - NPVI_SYL_STD
+    npvi_high = NPVI_SYL_MEAN + NPVI_SYL_STD
+    varco_low = VARCO_SYL_MEAN - VARCO_SYL_STD
+    varco_high = VARCO_SYL_MEAN + VARCO_SYL_STD
+
+    result = []
+    yellow_count = 0
+    red_count = 0
+
+    for i, c in enumerate(sorted_chunks):
+        word_count = (c.get('counts') or {}).get('syl', 0) or 0
+
+        # 💡 字數太少(<=2)：不管 nPVI/Varco 是不是 null，數值都不可靠，直接標記 skip
+        if word_count <= 2:
+            result.append({
+                "chunk_index": i,
+                "text": c.get('label', ''),
+                "npvi": None,
+                "varco": None,
+                "npvi_pass": None,
+                "varco_pass": None,
+                "npvi_direction": None,
+                "npvi_deviation": None,
+                "varco_direction": None,
+                "varco_deviation": None,
+                "status": "skip"
+            })
+            continue
+
+        npvi_raw = (c.get('nPVI') or {}).get('syl')
+        varco_raw = (c.get('Varco') or {}).get('syl')
+
+        npvi_val = round(float(npvi_raw) * 100, 2) if npvi_raw is not None else None
+        varco_val = round(float(varco_raw) * 100, 2) if varco_raw is not None else None
+
+        npvi_pass = (npvi_val is not None) and (npvi_low <= npvi_val <= npvi_high)
+        varco_pass = (varco_val is not None) and (varco_low <= varco_val <= varco_high)
+
+        # 💡 新增：算出偏差方向(太高/太低)跟差多少，供之後產生提示訊息用
+        npvi_direction = None
+        npvi_deviation = None
+        if npvi_val is not None and not npvi_pass:
+            if npvi_val > npvi_high:
+                npvi_direction = 'high'
+                npvi_deviation = round(npvi_val - npvi_high, 2)
+            else:
+                npvi_direction = 'low'
+                npvi_deviation = round(npvi_low - npvi_val, 2)
+
+        varco_direction = None
+        varco_deviation = None
+        if varco_val is not None and not varco_pass:
+            if varco_val > varco_high:
+                varco_direction = 'high'
+                varco_deviation = round(varco_val - varco_high, 2)
+            else:
+                varco_direction = 'low'
+                varco_deviation = round(varco_low - varco_val, 2)
+
+        if npvi_val is None and varco_val is None:
+            status = 'skip'   # 字數雖然夠，但這句話還是完全沒有 nPVI/Varco 資料可判斷
+        elif npvi_pass and varco_pass:
+            status = 'pass'
+        elif npvi_pass or varco_pass:
+            status = 'yellow'
+            yellow_count += 1
+        else:
+            status = 'red'
+            red_count += 1
+
+        result.append({
+            "chunk_index": i,
+            "text": c.get('label', ''),
+            "npvi": npvi_val,
+            "varco": varco_val,
+            "npvi_pass": npvi_pass,
+            "varco_pass": varco_pass,
+            "npvi_direction": npvi_direction,      # 💡 新增：'high' / 'low' / None
+            "npvi_deviation": npvi_deviation,       # 💡 新增：超出標準範圍多少
+            "varco_direction": varco_direction,     # 💡 新增：'high' / 'low' / None
+            "varco_deviation": varco_deviation,      # 💡 新增：超出標準範圍多少
+            "status": status
+        })
+
+    return result, yellow_count, red_count
+
+
+def call_ollama_fluency_feedback(sentence_fluency_list):
+    """
+    💡 【核心新增】：把整份錄音裡「每一句話」的 nPVI/Varco 偏差方向與差多少，
+       整理成一份摘要，丟給 Ollama，請它針對這份錄音的節奏/語速流暢度給一段
+       繁體中文、簡潔好懂的整體回饋（不是給小朋友聽的逐句提示，逐句提示是用固定範本、
+       前端點擊時即時顯示，不用等這支 API）。
+
+    參數：
+        sentence_fluency_list: compute_sentence_fluency_status() 回傳的那個 list
+
+    回傳：
+        字串（Ollama 生成的整體回饋文字）；失敗時回傳空字串
+    """
+    flagged = [s for s in (sentence_fluency_list or []) if s.get('status') in ('yellow', 'red')]
+
+    if not flagged:
+        return "這次朗讀的節奏和語速都很穩定，跟標準範圍很接近，繼續保持！"
+
+    # 整理每句的偏差方向，數一下各種狀況出現幾次，讓 Ollama 抓到整體模式（這是內部參考資訊，
+    # 不代表要它在回饋裡直接講「nPVI偏高」這種術語，是要它用自然語言描述問題）
+    npvi_high = sum(1 for s in flagged if s.get('npvi_direction') == 'high')
+    npvi_low = sum(1 for s in flagged if s.get('npvi_direction') == 'low')
+    varco_high = sum(1 for s in flagged if s.get('varco_direction') == 'high')
+    varco_low = sum(1 for s in flagged if s.get('varco_direction') == 'low')
+
+    # 💡 找出「偏差最嚴重」的那一句(npvi_deviation + varco_deviation 加總最大者)，
+    #    把它的實際內容告訴 Ollama，要求回饋裡「一定要」用引號把這句話完整引用出來，
+    #    不能只講抽象的統計數字，要讓小朋友知道具體是哪一句需要加強。
+    def _total_deviation(s):
+        return (s.get('npvi_deviation') or 0) + (s.get('varco_deviation') or 0)
+
+    worst = max(flagged, key=_total_deviation)
+    worst_text = (worst.get('text') or '').strip()
+    worst_deviation = _total_deviation(worst)
+    worst_info = ""
+    if worst_text and worst_deviation > 0:
+        worst_info = f'\n這次問題最明顯的一句話是：「{worst_text}」'
+
+    prompt = f"""你是一位親切的兒童英語朗讀老師，要給小朋友一段簡短的朗讀流暢度回饋。
+
+這裡有兩個聲學指標的參考說明（這只是給你理解問題用的內部資訊，不要直接把「nPVI」「Varco」這種術語寫進回饋裡）：
+- 節奏變化太大：忽快忽慢，可能有不正常的卡頓或拉長音
+- 節奏太平：沒有語調起伏，念起來很平淡
+- 語速不穩定：忽快忽慢，停頓不規律
+- 語音單調：缺乏抑揚頓挫，聽起來死板
+
+這次朗讀總共有 {len(flagged)} 句話的節奏或語速需要加強。
+{worst_info}
+
+請寫一段給小朋友看的整體回饋，規則非常重要、請務必遵守：
+
+1. 【語言規則】整段回饋只能使用「繁體中文」。除了要引用課文原句時可以保留英文原文以外，
+   所有的說明、形容、建議文字都必須是中文，絕對不可以出現任何一句完整的英文句子當作說明或建議
+   （例如不可以寫出像 "focus on keeping a steady pace..." 這種英文句子）。
+
+2. 【一定要引用原句】如果上面有提到「這次問題最明顯的一句話」，你「一定要」用「句子『英文原句』」
+   這種格式，把那句英文原文完整地包在引號裡講出來，明確指出是哪一句話出了問題，不能只用抽象的說法帶過。
+
+3. 【語氣自然】用口語、自然的中文描述，不要用條列式或列點，就像老師直接跟小朋友說話一樣，
+   語氣親切鼓勵，不要打擊信心。
+
+4. 【長度】大約 2 到 3 句話，不要太長。
+
+5. 【練習建議也要中文】具體指出主要的問題模式，並給一個簡單的練習建議，練習建議的說明文字也一律用中文，
+   只有在引用課文原句時才能出現英文。
+
+參考範例格式（僅供參考語氣和結構，實際內容請根據上面的資訊自己生成）：
+「這次朗讀整體節奏有點忽快忽慢，尤其是句子『they check on all their friends』念的時候速度不太穩定。
+練習的時候可以試著放慢一點，每個字之間的間隔盡量平均，這樣念起來會更順喔！」
+
+請「只」回傳一個 JSON 物件，不要有任何其他文字說明或 markdown 標記，格式如下：
+{{"feedback": "這裡放你寫的回饋文字"}}
+"""
+
+    result = _call_ollama(prompt)
+    if not result:
+        return ""
+
+    try:
+        return str(result.get("feedback", "")).strip()
+    except Exception as e:
+        print(f"🚨 Ollama 流暢度回饋格式異常: {e}, 原始回傳: {result}", flush=True)
+        return ""
+
+
+def call_ollama_wer_feedback(wer_stats):
+    """
+    💡 【核心新增】：把整份錄音的發音錯誤統計數字（漏字/贅字/替換/各種repair）丟給 Ollama，
+       請它針對「發音正確度」給一段繁體中文、簡潔好懂的整體回饋。
+    """
+    deletions = wer_stats.get('deletions', 0)
+    insertions = wer_stats.get('insertions', 0)
+    substitutions = wer_stats.get('substitutions', 0)
+    repair_attempt = wer_stats.get('repair_attempt', 0)
+    repair_repetition = wer_stats.get('repair_repetition', 0)
+    repair_replacement = wer_stats.get('repair_replacement', 0)
+    repair_restart = wer_stats.get('repair_restart', 0)
+    total_errors = wer_stats.get('total_errors', 0)
+    total_ref_words = wer_stats.get('total_ref_words', 1)
+
+    if total_errors == 0:
+        return "這次朗讀完全正確，發音跟課文一字不差，非常棒！"
+
+    prompt = f"""你是一位親切的兒童英語朗讀老師，要給小朋友一段簡短的發音回饋。
+
+這次朗讀的錯誤統計（總字數 {total_ref_words} 字）：
+- 漏字 (deletions)：{deletions}
+- 贅字 (insertions)：{insertions}
+- 替換錯誤 (substitutions)：{substitutions}
+- 重複 (repair_repetition)：{repair_repetition}
+- 嘗試修正 (repair_attempt)：{repair_attempt}
+- 重新開始/替換修復 (repair_restart + repair_replacement)：{repair_restart + repair_replacement}
+- 總錯誤數：{total_errors}
+
+請用繁體中文寫一段給小朋友看的整體發音回饋，規則非常重要、請務必遵守：
+
+1. 【語言規則】整段回饋只能使用「繁體中文」，絕對不可以出現任何一句完整的英文句子當作說明或建議。
+2. 【語氣自然】用口語、自然的中文描述，就像老師直接跟小朋友說話一樣，語氣親切鼓勵，不要打擊信心。
+3. 【長度】大約 2 到 3 句話，不要太長。
+4. 具體指出主要的問題類型（例如常常漏字、或常常需要重新開始），並給一個簡單的、中文描述的練習建議。
+
+請「只」回傳一個 JSON 物件，不要有任何其他文字說明或 markdown 標記，格式如下：
+{{"feedback": "這裡放你寫的回饋文字"}}
+"""
+
+    result = _call_ollama(prompt)
+    if not result:
+        return ""
+
+    try:
+        return str(result.get("feedback", "")).strip()
+    except Exception as e:
+        print(f"🚨 Ollama 發音回饋格式異常: {e}, 原始回傳: {result}", flush=True)
+        return ""
 
 
 def call_ollama_score_overall_fluency(npvi_value, varco_value):
@@ -603,6 +852,9 @@ def upload_audio():
         wer_stats = {"wer_repair_fluency": 0.0, "total_ref_words": len(original_text.split())}
         alignment_report = []
         chunks_list = []
+        sentence_fluency = []
+        fluency_yellow_count = 0
+        fluency_red_count = 0
         error_count = 0
 
         npvi_score = 0.0
@@ -677,6 +929,10 @@ def upload_audio():
                         textgrid_filename = actual_data.get("file", "output.TextGrid")
                         chunks_list = actual_data.get("chunk_results") or []
                         overall = actual_data.get("overall_metrics", {}) or {}
+
+                        # 💡 對每一句話自己的 nPVI/Varco，判斷有沒有落在標準範圍內
+                        #    (pass / yellow / red / skip)，供前端「流暢度」篩選按鈕使用。
+                        sentence_fluency, fluency_yellow_count, fluency_red_count = compute_sentence_fluency_status(chunks_list)
 
                         # 💡 新增：從 NPVI 回傳的 pause_analysis 抓出停頓次數，
                         #    給 Ollama 評「流利度」時當作參考依據之一。
@@ -788,6 +1044,24 @@ def upload_audio():
         except Exception as ollama_err:
             print(f"🚨 呼叫 Ollama 單段流暢度評分失敗: {ollama_err}", flush=True)
 
+        # 🚀 【核心新增】：兩段「整份錄音」的文字回饋——
+        #    一段是 nPVI/Varco 節奏語速的流暢度回饋，一段是發音正確度(WER)的回饋。
+        #    逐句的即時提示不會呼叫 Ollama（前端用固定範本秒開），這裡是給使用者事後
+        #    查看整體報告時看的、比較有深度的整體評語。
+        fluency_feedback_text = ""
+        try:
+            fluency_feedback_text = call_ollama_fluency_feedback(sentence_fluency)
+            print(f"✅ Ollama 流暢度回饋完成: {fluency_feedback_text}", flush=True)
+        except Exception as ollama_err:
+            print(f"🚨 呼叫 Ollama 流暢度回饋失敗: {ollama_err}", flush=True)
+
+        wer_feedback_text = ""
+        try:
+            wer_feedback_text = call_ollama_wer_feedback(wer_stats)
+            print(f"✅ Ollama 發音回饋完成: {wer_feedback_text}", flush=True)
+        except Exception as ollama_err:
+            print(f"🚨 呼叫 Ollama 發音回饋失敗: {ollama_err}", flush=True)
+
         # 🔧 核心修正：projects.overall_fluency_score_100（整個「專案」的分數）
         #    *只有整篇模式 (whole)* 才能直接沿用這一段的分數 —— 因為整篇模式從頭到尾只有這一筆錄音，
         #    這一筆的分數本來就等於整個專案的分數。
@@ -819,6 +1093,9 @@ def upload_audio():
             "word_alignments": alignment_report,
             "chunk_details": chunks_list,
             "word_timings": word_timings,
+            "sentence_fluency": sentence_fluency,
+            "fluency_feedback_text": fluency_feedback_text,
+            "wer_feedback_text": wer_feedback_text,
             "raw_wer_output": full_wer_raw_json,
             "raw_npvi_output": full_npvi_raw_json
         }
@@ -830,23 +1107,27 @@ def upload_audio():
                INSERT INTO recordings (project_id, paragraph_index, file_path, wer, total_words, error_count,
                                        alignment_report, npvi, varco, whisper_text_path, textgrid_path,
                                        score_completeness, score_accuracy, score_fluency, score_grammar,
-                                       fluency_score_100)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                       fluency_score_100, fluency_yellow_count, fluency_red_count,
+                                       fluency_feedback_text, wer_feedback_text)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                ON DUPLICATE KEY UPDATE
                   file_path = %s, wer = %s, total_words = %s, error_count = %s, alignment_report = %s,
                   npvi = %s, varco = %s, whisper_text_path = %s, textgrid_path = %s,
                   score_completeness = %s, score_accuracy = %s, score_fluency = %s, score_grammar = %s,
-                  fluency_score_100 = %s
+                  fluency_score_100 = %s, fluency_yellow_count = %s, fluency_red_count = %s,
+                  fluency_feedback_text = %s, wer_feedback_text = %s
                """
             cursor.execute(insert_sql, (
                 project_id, para_idx, db_path, wer_score, total_words, error_count, alignment_json,
                 npvi_score, varco_score, whisper_text_db_path, textgrid_db_path,
                 score_completeness, score_accuracy, score_fluency, score_grammar,
-                recording_fluency_score_100,
+                recording_fluency_score_100, fluency_yellow_count, fluency_red_count,
+                fluency_feedback_text, wer_feedback_text,
                 db_path, wer_score, total_words, error_count, alignment_json,
                 npvi_score, varco_score, whisper_text_db_path, textgrid_db_path,
                 score_completeness, score_accuracy, score_fluency, score_grammar,
-                recording_fluency_score_100
+                recording_fluency_score_100, fluency_yellow_count, fluency_red_count,
+                fluency_feedback_text, wer_feedback_text
             ))
             conn.commit()
         except Exception as db_err:
@@ -870,6 +1151,7 @@ def upload_audio():
                 "varco": varco_score,
                 "chunk_details": chunks_list,
                 "word_timings": word_timings,
+                "sentence_fluency": sentence_fluency,
                 "textgrid_associated": textgrid_filename,
                 "whisper_text_path": whisper_text_db_path,
                 "textgrid_path": textgrid_db_path,
@@ -878,7 +1160,9 @@ def upload_audio():
                 "score_fluency": score_fluency,
                 "score_grammar": score_grammar,
                 "overall_fluency_score_100": overall_fluency_score_100,
-                "recording_fluency_score_100": recording_fluency_score_100
+                "recording_fluency_score_100": recording_fluency_score_100,
+                "fluency_feedback_text": fluency_feedback_text,
+                "wer_feedback_text": wer_feedback_text
             }
         })
 
@@ -913,7 +1197,8 @@ def get_project_total_report():
 
         sql = """
             SELECT paragraph_index, file_path, wer, total_words, error_count, alignment_report, npvi, varco,
-                   score_completeness, score_accuracy, score_fluency, score_grammar, fluency_score_100
+                   score_completeness, score_accuracy, score_fluency, score_grammar, fluency_score_100,
+                   fluency_feedback_text, wer_feedback_text
             FROM recordings
             WHERE project_id = %s
             ORDER BY paragraph_index ASC
@@ -958,7 +1243,9 @@ def get_project_total_report():
                     "score_accuracy": row['score_accuracy'] if row['score_accuracy'] is not None else 0.0,
                     "score_fluency": row['score_fluency'] if row['score_fluency'] is not None else 0.0,
                     "score_grammar": row['score_grammar'] if row['score_grammar'] is not None else 0.0,
-                    "fluency_score_100": row['fluency_score_100'] if row['fluency_score_100'] is not None else 0.0
+                    "fluency_score_100": row['fluency_score_100'] if row['fluency_score_100'] is not None else 0.0,
+                    "fluency_feedback_text": row['fluency_feedback_text'] or "",
+                    "wer_feedback_text": row['wer_feedback_text'] or ""
                 })
 
                 if row['wer'] is not None:
@@ -984,6 +1271,8 @@ def get_project_total_report():
                     "score_accuracy": None,
                     "score_fluency": None,
                     "score_grammar": None,
+                    "fluency_feedback_text": None,
+                    "wer_feedback_text": None,
                     "fluency_score_100": None
                 })
 

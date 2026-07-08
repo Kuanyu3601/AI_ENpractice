@@ -1397,6 +1397,8 @@ async function uploadAudio() {
                 result.wer_result.statistics.score_fluency = result.wer_result.score_fluency ?? 0;
                 result.wer_result.statistics.score_grammar = result.wer_result.score_grammar ?? 0;
                 result.wer_result.statistics.overall_fluency_score_100 = result.wer_result.overall_fluency_score_100 ?? 0;
+                result.wer_result.statistics.fluency_feedback_text = result.wer_result.fluency_feedback_text || '';
+                result.wer_result.statistics.wer_feedback_text = result.wer_result.wer_feedback_text || '';
 
                 // 呼叫單段即時更新器
                 renderWerReportToPanel3(
@@ -3004,7 +3006,7 @@ function renderFluencyBulletBar(label, value, mean, std, barColor) {
     `;
 }
 
-function renderChunkTranscriptRow(layout, targetCategory) {
+function renderChunkTranscriptRow(layout, targetCategory, chunkFluencyMap) {
     // 💡 「重新開始」這個類別，同時涵蓋 Repair_Restart 跟 Repair_Replacement 兩種原始類別
     //    （這是原本就有的設計：replacement 屬於一種特殊的 restart，兩者合併算同一個按鈕）
     const targetCategoryMap = {
@@ -3015,16 +3017,30 @@ function renderChunkTranscriptRow(layout, targetCategory) {
         'deletions': ['delete'],
         'insertions': ['insert']
     };
-    const normalizedTargets = targetCategory ? (targetCategoryMap[targetCategory] || [targetCategory.toLowerCase()]) : null;
+    const isFluencyMode = targetCategory === 'fluency';
+    const normalizedTargets = (targetCategory && !isFluencyMode) ? (targetCategoryMap[targetCategory] || [targetCategory.toLowerCase()]) : null;
+    let lastChunkIdxSeen = null; // 💡 用來判斷「這是不是這句話的第一個字」，只在第一個字前面加播放圖示
 
     return layout.map((c, i) => {
         // 💡 核心修正：顏色分組改用 chunkIndex（這個字屬於第幾個句子分段），
         //    不再用逐字本身的陣列位置 i，這樣同一句話裡的每個字會維持同一個顏色，
         //    只有換到下一句才會切換淺藍/淺綠，不會變成每個字一個顏色的彩虹畫面。
         const isBlue = (c.chunkIndex || 0) % 2 === 0;
-        const bg = isBlue ? '#eff6ff' : '#ecfdf5';       // 淺藍 / 淺綠 交錯
+        let bg = isBlue ? '#eff6ff' : '#ecfdf5';       // 淺藍 / 淺綠 交錯
         const refColor = '#1f2937';
         const hypColorDefault = '#6b7280';
+
+        // 💡 流暢度模式：整句(這個 chunk)的 npvi/varco 有沒有落在標準範圍內，
+        //    黃色 = 只有一個指標過關，紅色 = 兩個指標都沒過關，整句的字全部套用同一個顏色。
+        const sentenceStatus = (isFluencyMode && chunkFluencyMap) ? ((chunkFluencyMap[c.chunkIndex] || {}).status || 'pass') : null;
+        let sentenceWordColor = null;
+        if (sentenceStatus === 'red') {
+            bg = '#fee2e2';
+            sentenceWordColor = '#dc2626';
+        } else if (sentenceStatus === 'yellow') {
+            bg = '#fef9c3';
+            sentenceWordColor = '#b45309';
+        }
 
         const wordsHtml = (c.items || []).map(item => {
             const cat = (item.Category || item.category || '').toString().toLowerCase();
@@ -3035,7 +3051,13 @@ function renderChunkTranscriptRow(layout, targetCategory) {
             let hypStyle = `color: ${hypColorDefault}; font-weight: 500;`;
             let displayHyp = hyp;
 
-            if (isTargetError) {
+            if (isFluencyMode) {
+                // 💡 流暢度模式：不管這個字本身是不是 WER 錯誤，只要整句被判定黃/紅，字就套用該顏色
+                if (sentenceWordColor) {
+                    hypStyle = `color: ${sentenceWordColor}; font-weight: 700;`;
+                }
+                if (hyp === '—' || !hyp) displayHyp = '-';
+            } else if (isTargetError) {
                 hypStyle = 'color: #e63946; font-weight: 800; background: #fee2e2; padding: 2px 4px; border-radius: 4px; border-bottom: 2px solid #e63946;';
                 if (cat === 'delete') displayHyp = 'NULL';
             } else if (hyp === '—' || !hyp) {
@@ -3055,11 +3077,31 @@ function renderChunkTranscriptRow(layout, targetCategory) {
             ? `<div style="flex: 0 0 ${c.gapBeforePx}px; width:${c.gapBeforePx}px;"></div>`
             : '';
 
+        // 💡 只在流暢度模式，且是「這句話的第一個字」，且這句被標記黃/紅時，
+        //    加一個小小的播放圖示 + 文字標籤，讓顏色代表的意思一目瞭然，
+        //    不然只看紅色/黃色的底色，使用者不會知道那是什麼意思。
+        const isFirstWordOfChunk = c.chunkIndex !== lastChunkIdxSeen;
+        lastChunkIdxSeen = c.chunkIndex;
+        const showPlayHint = isFluencyMode && isFirstWordOfChunk && (sentenceStatus === 'red' || sentenceStatus === 'yellow');
+        let playHintHtml = '';
+        if (showPlayHint) {
+            const isRed = sentenceStatus === 'red';
+            const labelText = isRed ? '不流暢' : '待加強';
+            const labelColor = isRed ? '#dc2626' : '#b45309';
+            const labelBg = isRed ? '#fecaca' : '#fde68a';
+            playHintHtml = `
+                <span title="點擊這句可以聽正確發音示範" style="display:flex; flex-direction:column; align-items:center; margin-right:6px; align-self:center; flex:0 0 auto;">
+                    <span style="font-size:0.9rem;">🔊</span>
+                    <span style="font-size:0.65rem; font-weight:bold; color:${labelColor}; background:${labelBg}; padding:1px 6px; border-radius:8px; white-space:nowrap; margin-top:2px;">${labelText}</span>
+                </span>
+            `;
+        }
+
         return spacerHtml + `
-            <div class="chunk-transcript-block" data-word-idx="${i}" style="flex: 0 0 ${c.width}px; width:${c.width}px; background:${bg};
+            <div class="chunk-transcript-block" data-word-idx="${i}" data-chunk-idx="${c.chunkIndex || 0}" style="flex: 0 0 ${c.width}px; width:${c.width}px; background:${bg}; cursor:pointer;
                         display:flex; flex-wrap:nowrap; align-items:flex-start; padding:8px 6px; box-sizing:border-box;
                         border-right: 3px solid rgba(30,41,59,0.35); overflow:visible; transition: box-shadow 0.15s;">
-                ${wordsHtml || '<span style="color:#9ca3af;font-size:0.8rem;">（無內容）</span>'}
+                ${playHintHtml}${wordsHtml || '<span style="color:#9ca3af;font-size:0.8rem;">（無內容）</span>'}
             </div>
         `;
     }).join('');
@@ -3122,10 +3164,144 @@ function findFirstErrorLayoutIndex(layout, errorType) {
 }
 
 /**
+ * 💡 流暢度模式專用：在目前排版陣列裡，找出「第一個」被標記為紅色或黃色的句子(chunk)位置。
+ *    優先找紅色（比較嚴重），找不到紅色才找黃色。找不到都回傳 -1。
+ */
+function findFirstFlaggedSentenceIndex(layout, chunkFluencyMap) {
+    if (!chunkFluencyMap) return -1;
+    let firstYellow = -1;
+    for (let i = 0; i < layout.length; i++) {
+        const status = (chunkFluencyMap[layout[i].chunkIndex] || {}).status;
+        if (status === 'red') return i;
+        if (status === 'yellow' && firstYellow === -1) firstYellow = i;
+    }
+    return firstYellow;
+}
+
+// ══════════════════════════════════════════════════
+//  🗣️ 逐句「點擊 TTS 朗讀正確版本」— 只在流暢度模式下才會觸發，不顯示提示文字
+// ══════════════════════════════════════════════════
+/**
+ * 💡 把某個 chunkIndex 所有字的「正確課文(Reference)」依序接起來，組成完整的正確句子，
+ *    給 TTS 唸出來，讓小朋友聽到正確的示範發音（不是唸使用者念錯的內容）。
+ */
+function buildReferenceSentenceForChunk(layout, chunkIndex) {
+    const words = [];
+    layout.forEach(entry => {
+        if (entry.chunkIndex !== chunkIndex) return;
+        (entry.items || []).forEach(item => {
+            const ref = (item.Reference || item.reference || '').trim();
+            if (ref && ref !== '—' && ref !== '–') words.push(ref);
+        });
+    });
+    return words.join(' ');
+}
+
+/**
+ * 💡 用繁體中文語音唸出 Ollama 產生的整體回饋文字（節奏流暢度評語 / 發音正確度評語）。
+ *    跟 speakSentence() 不同：speakSentence() 是唸英文課文(lang=en-US)，
+ *    這個是唸中文評語，語言要設定成 zh-TW。
+ */
+function getChineseVoice() {
+    if (typeof speechSynthesis === 'undefined') return null;
+    const voices = speechSynthesis.getVoices() || [];
+    if (voices.length === 0) {
+        // 語音清單還沒載入完成，掛一次性監聽，下次呼叫就會抓到
+        speechSynthesis.onvoiceschanged = () => { speechSynthesis.getVoices(); };
+        return null;
+    }
+    // 💡 優先選 Google 的中文語音（音質通常比作業系統內建的 SAPI 語音自然一點），
+    //    找不到才退回任何 zh-TW / zh 開頭的語音。
+    return voices.find(v => v.lang === 'zh-TW' && v.name.includes('Google'))
+        || voices.find(v => v.lang === 'zh-TW')
+        || voices.find(v => (v.lang || '').toLowerCase().startsWith('zh'))
+        || null;
+}
+
+function getEnglishVoice() {
+    if (typeof speechSynthesis === 'undefined') return null;
+    const voices = speechSynthesis.getVoices() || [];
+    return voices.find(v => v.lang === 'en-US') || voices.find(v => (v.lang || '').toLowerCase().startsWith('en')) || null;
+}
+
+/**
+ * 💡 核心修正：整段回饋文字常常會是「中文說明 + 『英文原句引用』」混在一起，
+ *    如果整句都用同一個中文語音去唸，唸到中間那段英文時，中文語音引擎會用中文腔調
+ *    硬拼英文單字，聽起來就會卡卡的、像在一個字一個字唸。
+ *
+ *    這裡改成：先用「『...』」這個引號抓出裡面包的英文句子，把整段文字拆成一節一節，
+ *    中文的部分用中文語音唸、引號裡的英文句子用英文語音唸，兩種語音接力播放，
+ *    這樣中英文各自都能唸得自然，不會互相干擾。
+ */
+function splitFeedbackIntoSegments(text) {
+    const segments = [];
+    const regex = /『([^』]+)』|「([^」]+)」/g;
+    let lastIndex = 0;
+    let match;
+
+    while ((match = regex.exec(text)) !== null) {
+        if (match.index > lastIndex) {
+            const zhPart = text.slice(lastIndex, match.index).trim();
+            if (zhPart) segments.push({ text: zhPart, lang: 'zh' });
+        }
+        const quoted = (match[1] || match[2] || '').trim();
+        if (quoted) segments.push({ text: quoted, lang: 'en' });
+        lastIndex = regex.lastIndex;
+    }
+    const rest = text.slice(lastIndex).trim();
+    if (rest) segments.push({ text: rest, lang: 'zh' });
+
+    return segments.length ? segments : [{ text, lang: 'zh' }];
+}
+
+function speakChineseFeedback(text, onEndCallback) {
+    if (!text || !text.trim()) {
+        if (onEndCallback) onEndCallback();
+        return;
+    }
+    speechSynthesis.cancel();
+
+    const segments = splitFeedbackIntoSegments(text);
+    const zhVoice = getChineseVoice();
+    const enVoice = getEnglishVoice();
+
+    let idx = 0;
+    function speakNext() {
+        if (idx >= segments.length) {
+            if (onEndCallback) onEndCallback();
+            return;
+        }
+        const seg = segments[idx];
+        idx++;
+
+        const utt = new SpeechSynthesisUtterance(seg.text);
+        if (seg.lang === 'en') {
+            utt.lang = 'en-US';
+            if (enVoice) utt.voice = enVoice;
+            utt.rate = 0.95;
+        } else {
+            utt.lang = 'zh-TW';
+            if (zhVoice) utt.voice = zhVoice;
+            utt.rate = 0.92; // 💡 比 1.0 稍慢一點，聽起來比較像自然講話，不會像在逐字念
+        }
+        utt.pitch = 1;
+
+        utt.onend = () => setTimeout(speakNext, 50);
+        utt.onerror = () => setTimeout(speakNext, 50);
+
+        speechSynthesis.speak(utt);
+    }
+
+    // 💡 剛呼叫完 cancel() 別馬上呼叫 speak()，Chrome 在同一瞬間執行這兩個動作
+    //    偶爾會讓語音佇列卡住完全沒有聲音，延遲一點點可以繞開這個問題。
+    setTimeout(speakNext, 60);
+}
+
+/**
  * 💡 建立完整的「WaveSurfer 波形(疊加一深一淺色塊做分段) + 逐字稿對照 + 篩選按鈕」小工具 HTML。
  *    chunks 直接用 extendedReport.chunk_details（NPVI 回傳的 chunk_results，含 xmin/xmax/label）。
  */
-function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl, wordTimings) {
+function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl, wordTimings, sentenceFluency, fluencyFeedbackText, werFeedbackText) {
     const WORD_SLOT_WIDTH = 50;  // 每個字（含上下兩行）大約需要的寬度
     const MIN_PX_PER_SEC = 60;   // 每秒最少像素，避免音檔很長、字很少時比例被拉得太小
 
@@ -3134,6 +3310,15 @@ function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl, w
     //    才退回用 NPVI 的 chunk_results 做「用字數比例分配」的近似對齊。
     const hasWordTimings = Array.isArray(wordTimings) && wordTimings.length > 0;
     const sortedChunks = [...(chunks || [])].sort((a, b) => (a.xmin || 0) - (b.xmin || 0));
+
+    // 💡 建立「這句話(chunkIndex) → 完整流暢度判定物件」對照表（含 npvi_direction/varco_direction/差距等）。
+    //    後端 compute_sentence_fluency_status() 是依 xmin 排序後用陣列位置當 chunk_index，
+    //    跟這裡 sortedChunks 的排序方式完全一致，兩邊的索引才能直接對應。
+    const chunkFluencyMap = {};
+    (sentenceFluency || []).forEach(sf => {
+        chunkFluencyMap[sf.chunk_index] = sf;
+    });
+    const fluencyFlaggedCount = (sentenceFluency || []).filter(sf => sf.status === 'yellow' || sf.status === 'red').length;
 
     let grouped = hasWordTimings
         ? assignItemsToWords(wordTimings, alignmentReport)
@@ -3186,7 +3371,10 @@ function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl, w
     return `
         <div class="chunk-audio-widget" id="${stripId}-chunkwidget"
              data-layout='${layoutJson}' data-raw-groups='${rawGroupsJson}' data-chunks='${chunkTimesJson}'
-             data-audio-url="${cleanAudioUrl}" data-base-px-per-sec="${basePxPerSec}" data-active-category="">
+             data-audio-url="${cleanAudioUrl}" data-base-px-per-sec="${basePxPerSec}" data-active-category=""
+             data-chunk-fluency='${JSON.stringify(chunkFluencyMap).replace(/'/g, "&apos;")}'
+             data-fluency-feedback="${(fluencyFeedbackText || '').replace(/"/g, '&quot;')}"
+             data-wer-feedback="${(werFeedbackText || '').replace(/"/g, '&quot;')}">
             <div style="font-size: 0.9rem; font-weight: bold; color: #475569; margin-bottom: 8px;">
                 🎵 錄音回放
             </div>
@@ -3200,6 +3388,10 @@ function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl, w
                 <button class="wer-filter-btn-chunked" onclick="window.switchWerFilterChunked(this, 'substitutions', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">替換 (${errorCounts.substitutions})</button>
                 <button class="wer-filter-btn-chunked" onclick="window.switchWerFilterChunked(this, 'deletions', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">刪除 (${errorCounts.deletions})</button>
                 <button class="wer-filter-btn-chunked" onclick="window.switchWerFilterChunked(this, 'insertions', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">插入 (${errorCounts.insertions})</button>
+                <div style="width:1px; height:22px; background:#e2e8f0; margin: 0 4px;"></div>
+                <button class="wer-filter-btn-chunked" onclick="window.switchWerFilterChunked(this, 'fluency', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;" title="按句子比對 nPVI/Varco 標準範圍：黃色=部分不合格，紅色=兩項都不合格，點擊會語音播放整體評語">流暢度 (${fluencyFlaggedCount})</button>
+                <span id="${stripId}-replay-icon" onclick="window.replayLastFeedback('${stripId}')" title="重播剛剛的語音評語" style="display:none; cursor:pointer; font-size:1.1rem; padding:2px 6px;">🔁</span>
+                <span id="${stripId}-pause-icon" onclick="window.togglePauseFeedback('${stripId}')" title="暫停/繼續播放" style="display:none; cursor:pointer; font-size:1.1rem; padding:2px 6px;">⏸</span>
             </div>
 
             <div style="display:flex; align-items:center; gap:10px; margin-bottom: 10px; flex-wrap: wrap;">
@@ -3245,20 +3437,85 @@ window.switchWerFilterChunked = function(btn, errorType, stripId) {
     let layout = [];
     try { layout = JSON.parse(widget.dataset.layout); } catch (e) { return; }
 
-    const transcriptRow = document.getElementById(`${stripId}-transcript`);
-    if (transcriptRow) {
-        transcriptRow.innerHTML = renderChunkTranscriptRow(layout, errorType);
+    const isFluencyMode = errorType === 'fluency';
+    let chunkFluencyMap = null;
+    if (isFluencyMode) {
+        try { chunkFluencyMap = JSON.parse(widget.dataset.chunkFluency); } catch (e) { chunkFluencyMap = {}; }
     }
 
-    // 💡 自動捲動到「第一個」命中這個錯誤類別的位置，波形跟逐字稿是同一個捲動容器，
+    const transcriptRow = document.getElementById(`${stripId}-transcript`);
+    if (transcriptRow) {
+        transcriptRow.innerHTML = renderChunkTranscriptRow(layout, errorType, chunkFluencyMap);
+    }
+
+    // 💡 自動捲動到「第一個」命中的位置，波形跟逐字稿是同一個捲動容器，
     //    一次捲動兩者都會一起移動過去，不用使用者自己手動找。
-    const firstIdx = findFirstErrorLayoutIndex(layout, errorType);
+    const firstIdx = isFluencyMode
+        ? findFirstFlaggedSentenceIndex(layout, chunkFluencyMap)
+        : findFirstErrorLayoutIndex(layout, errorType);
     const scrollWrap = document.getElementById(`${stripId}-scrollwrap`);
     if (firstIdx >= 0 && scrollWrap && layout[firstIdx]) {
         const targetLeft = Math.max(layout[firstIdx].left - 60, 0); // 往前留一點邊界，不要貼死在最左邊
         scrollWrap.scrollTo({ left: targetLeft, behavior: 'smooth' });
     } else if (firstIdx === -1) {
-        showToast('這個類別目前沒有任何錯誤 🎉');
+        showToast(isFluencyMode ? '這份錄音的句子流暢度都合格 🎉' : '這個類別目前沒有任何錯誤 🎉');
+    }
+
+    // 💡 只有「流暢度」按鈕才會觸發語音播放整體評語，其餘 6 個 WER 類別按鈕只負責切換文字標色，
+    //    不會有任何聲音，避免點擊分類按鈕卻意外一直重複播放同一段評語。
+    const replayIcon = document.getElementById(`${stripId}-replay-icon`);
+    const pauseIcon = document.getElementById(`${stripId}-pause-icon`);
+
+    if (isFluencyMode) {
+        const feedbackText = widget.dataset.fluencyFeedback || '';
+        if (replayIcon) replayIcon.style.display = 'none';
+        if (pauseIcon) { pauseIcon.style.display = 'none'; pauseIcon.textContent = '⏸'; }
+
+        if (feedbackText) {
+            widget.dataset.lastFeedbackText = feedbackText;
+            if (pauseIcon) pauseIcon.style.display = 'inline';
+            speakChineseFeedback(feedbackText, () => {
+                if (replayIcon) replayIcon.style.display = 'inline';
+                if (pauseIcon) pauseIcon.style.display = 'none';
+            });
+        }
+    } else {
+        // 💡 切到其他分類時，如果評語還在播放中，直接停掉，避免背景一直放著跟目前畫面對不上
+        if (speechSynthesis.speaking) speechSynthesis.cancel();
+        if (replayIcon) replayIcon.style.display = 'none';
+        if (pauseIcon) pauseIcon.style.display = 'none';
+    }
+};
+
+/** 💡 重播上一次播放過的流暢度整體評語語音 */
+window.replayLastFeedback = function(stripId) {
+    const widget = document.getElementById(`${stripId}-chunkwidget`);
+    if (!widget) return;
+    const text = widget.dataset.lastFeedbackText || '';
+    if (!text) return;
+
+    const replayIcon = document.getElementById(`${stripId}-replay-icon`);
+    const pauseIcon = document.getElementById(`${stripId}-pause-icon`);
+    if (replayIcon) replayIcon.style.display = 'none';
+    if (pauseIcon) { pauseIcon.style.display = 'inline'; pauseIcon.textContent = '⏸'; }
+
+    speakChineseFeedback(text, () => {
+        if (replayIcon) replayIcon.style.display = 'inline';
+        if (pauseIcon) pauseIcon.style.display = 'none';
+    });
+};
+
+/** 💡 暫停 / 繼續播放目前正在唸的評語語音 */
+window.togglePauseFeedback = function(stripId) {
+    const pauseIcon = document.getElementById(`${stripId}-pause-icon`);
+    if (!speechSynthesis.speaking) return;
+
+    if (speechSynthesis.paused) {
+        speechSynthesis.resume();
+        if (pauseIcon) pauseIcon.textContent = '⏸';
+    } else {
+        speechSynthesis.pause();
+        if (pauseIcon) pauseIcon.textContent = '▶';
     }
 };
 
@@ -3414,8 +3671,12 @@ function initChunkedAudioBlock(stripId) {
             lastHighlightedIdx = -1;
 
             const activeCategory = widget.dataset.activeCategory || null;
+            let activeChunkFluencyMap = null;
+            if (activeCategory === 'fluency') {
+                try { activeChunkFluencyMap = JSON.parse(widget.dataset.chunkFluency); } catch (e) { activeChunkFluencyMap = {}; }
+            }
             const transcriptRow = document.getElementById(`${stripId}-transcript`);
-            if (transcriptRow) transcriptRow.innerHTML = renderChunkTranscriptRow(newLayout, activeCategory || null);
+            if (transcriptRow) transcriptRow.innerHTML = renderChunkTranscriptRow(newLayout, activeCategory || null, activeChunkFluencyMap);
 
             const totalDurationSec = newLayout.length ? Math.max(...newLayout.map(l => l.xmax || 0)) : 0;
             const newTotalWidthPx = Math.max(Math.ceil(totalDurationSec * newPxPerSec) + 20, 200);
@@ -3428,12 +3689,14 @@ function initChunkedAudioBlock(stripId) {
     // 💡 波形跟逐字稿現在是同一個捲動容器裡的兩個區塊，
     //    捲動這個容器就會「音檔跟文字一起移動」，不需要再手動同步兩個捲軸。
     //    這裡只加滑鼠按住拖曳的手勢，體驗類似手機滑動。
+    let dragMoved = false;
     if (scrollWrap) {
         let isDown = false;
         let startX = 0;
         let scrollLeftStart = 0;
         scrollWrap.addEventListener('mousedown', (e) => {
             isDown = true;
+            dragMoved = false;
             scrollWrap.style.cursor = 'grabbing';
             startX = e.pageX - scrollWrap.offsetLeft;
             scrollLeftStart = scrollWrap.scrollLeft;
@@ -3446,7 +3709,31 @@ function initChunkedAudioBlock(stripId) {
             e.preventDefault();
             const x = e.pageX - scrollWrap.offsetLeft;
             const walk = (x - startX) * 1.2;
+            if (Math.abs(walk) > 5) dragMoved = true; // 💡 移動超過一點距離才算是拖曳，避免誤判成點擊沒反應
             scrollWrap.scrollLeft = scrollLeftStart - walk;
+        });
+    }
+
+    // 💡 點擊句子（逐字稿裡任一個字）：只有目前在「流暢度」篩選模式下才會觸發，
+    //    用 TTS 唸出這句正確版本的句子，讓小朋友聽到正確發音示範（不顯示任何提示文字）。
+    const transcriptRowEl = document.getElementById(`${stripId}-transcript`);
+    if (transcriptRowEl) {
+        transcriptRowEl.addEventListener('click', (e) => {
+            if (dragMoved) return; // 剛剛是拖曳捲動，不是真的點擊，不要誤觸發
+            if (widget.dataset.activeCategory !== 'fluency') return; // 💡 只有流暢度模式才會點字出聲
+
+            const block = e.target.closest('.chunk-transcript-block');
+            if (!block) return;
+            const chunkIdx = parseInt(block.dataset.chunkIdx, 10);
+            if (isNaN(chunkIdx)) return;
+
+            let currentLayoutForClick = [];
+            try { currentLayoutForClick = JSON.parse(widget.dataset.layout); } catch (err) { return; }
+
+            const refSentence = buildReferenceSentenceForChunk(currentLayoutForClick, chunkIdx);
+            if (refSentence && typeof speakSentence === 'function') {
+                speakSentence(refSentence);
+            }
         });
     }
 }
@@ -3575,6 +3862,8 @@ function renderMultipleParagraphsReport(paragraphList, globalStats, mode = 'segm
 
                 const actualNpviNum = parseFloat(singleParaNpvi) || 0;
                 const actualVarcoNum = parseFloat(singleParaVarco) || 0;
+                const fluencyFeedbackText = para.fluency_feedback_text || '';
+                const werFeedbackText = para.wer_feedback_text || '';
 
                 const chartsHTML = `
                     <div style="display: flex; gap: 24px; width: 100%; flex-wrap: wrap;">
@@ -3596,9 +3885,11 @@ function renderMultipleParagraphsReport(paragraphList, globalStats, mode = 'segm
                 `;
 
                 // 🎵 區塊 2：分色分段音檔對照小工具（優先用逐字時間戳做真正的逐字對齊）
+                //    💡 兩段 Ollama 評語不再顯示成文字，改傳進小工具，點擊「流暢度」按鈕時用 TTS 唸出來。
                 const chunkListForWidget = extendedReport.chunk_details || [];
                 const wordTimingsForWidget = extendedReport.word_timings || [];
-                const chunkedAudioHTML = buildChunkedAudioBlock(stripId, chunkListForWidget, alignments, para.file_path || '', wordTimingsForWidget);
+                const sentenceFluencyForWidget = extendedReport.sentence_fluency || [];
+                const chunkedAudioHTML = buildChunkedAudioBlock(stripId, chunkListForWidget, alignments, para.file_path || '', wordTimingsForWidget, sentenceFluencyForWidget, fluencyFeedbackText, werFeedbackText);
 
                 body.innerHTML = chartsHTML + chunkedAudioHTML;
 
