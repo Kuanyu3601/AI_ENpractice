@@ -249,7 +249,10 @@ def _call_ollama(prompt, timeout=60):
             "model": OLLAMA_MODEL,
             "prompt": prompt,
             "stream": False,
-            "format": "json"
+            "format": "json",
+            "options": {
+                "num_predict": 300   # 💡 保險：確保有足夠的輸出長度，避免話講到一半被截斷
+            }
         }, timeout=timeout)
 
         if resp.status_code != 200:
@@ -595,10 +598,16 @@ def call_ollama_fluency_feedback(sentence_fluency_list):
         return ""
 
 
-def call_ollama_wer_feedback(wer_stats):
+def call_ollama_wer_category_feedback(category, wer_stats):
     """
-    💡 【核心新增】：把整份錄音的發音錯誤統計數字（漏字/贅字/替換/各種repair）丟給 Ollama，
-       請它針對「發音正確度」給一段繁體中文、簡潔好懂的整體回饋。
+    💡 【核心新增】：把單一 WER 總評拆成三個分項評語——完整度(漏字+贅字)、
+       準確度(替換錯誤)、流利度(4種repair行為)，各自獨立呼叫 Ollama，
+       這樣使用者點擊「完整度」「準確度」「流利度」標籤時，才能各自看到/聽到
+       只針對那個面向的具體回饋，而不是一份籠統的總評。
+
+    參數：
+        category: 'completeness' / 'accuracy' / 'fluency' 三選一
+        wer_stats: WER API 回傳的 statistics 物件
     """
     deletions = wer_stats.get('deletions', 0)
     insertions = wer_stats.get('insertions', 0)
@@ -607,29 +616,40 @@ def call_ollama_wer_feedback(wer_stats):
     repair_repetition = wer_stats.get('repair_repetition', 0)
     repair_replacement = wer_stats.get('repair_replacement', 0)
     repair_restart = wer_stats.get('repair_restart', 0)
-    total_errors = wer_stats.get('total_errors', 0)
-    total_ref_words = wer_stats.get('total_ref_words', 1)
+    total_ref_words = wer_stats.get('total_ref_words', 1) or 1
 
-    if total_errors == 0:
-        return "這次朗讀完全正確，發音跟課文一字不差，非常棒！"
+    if category == 'completeness':
+        count = deletions + insertions
+        focus_desc = f"漏字數 {deletions} 個、贅字數 {insertions} 個（總字數 {total_ref_words} 字）"
+        topic_name = "完整度（有沒有漏字或多念字）"
+    elif category == 'accuracy':
+        count = substitutions
+        focus_desc = f"替換錯誤數 {substitutions} 個（總字數 {total_ref_words} 字）"
+        topic_name = "準確度（有沒有把字念成別的字）"
+    else:  # fluency
+        count = repair_attempt + repair_repetition + repair_replacement + repair_restart
+        focus_desc = f"重複 {repair_repetition} 次、嘗試修正 {repair_attempt} 次、重新開始/替換修復 {repair_restart + repair_replacement} 次"
+        topic_name = "流利度（念的過程中有沒有卡頓、重來）"
 
-    prompt = f"""你是一位親切的兒童英語朗讀老師，要給小朋友一段簡短的發音回饋。
+    if count == 0:
+        defaults = {
+            'completeness': "這次朗讀完全沒有漏字或多念字，內容非常完整！",
+            'accuracy': "這次朗讀的每個字都念對了，準確度非常好！",
+            'fluency': "這次朗讀很流暢，沒有卡頓或重來，很棒！"
+        }
+        return defaults.get(category, "這個面向表現得很好！")
 
-這次朗讀的錯誤統計（總字數 {total_ref_words} 字）：
-- 漏字 (deletions)：{deletions}
-- 贅字 (insertions)：{insertions}
-- 替換錯誤 (substitutions)：{substitutions}
-- 重複 (repair_repetition)：{repair_repetition}
-- 嘗試修正 (repair_attempt)：{repair_attempt}
-- 重新開始/替換修復 (repair_restart + repair_replacement)：{repair_restart + repair_replacement}
-- 總錯誤數：{total_errors}
+    prompt = f"""你是一位親切的兒童英語朗讀老師，要針對「{topic_name}」這個面向，
+給小朋友一段簡短的回饋。
 
-請用繁體中文寫一段給小朋友看的整體發音回饋，規則非常重要、請務必遵守：
+這個面向的統計數字：{focus_desc}
+
+請用繁體中文寫一段回饋，規則非常重要、請務必遵守：
 
 1. 【語言規則】整段回饋只能使用「繁體中文」，絕對不可以出現任何一句完整的英文句子當作說明或建議。
 2. 【語氣自然】用口語、自然的中文描述，就像老師直接跟小朋友說話一樣，語氣親切鼓勵，不要打擊信心。
-3. 【長度】大約 2 到 3 句話，不要太長。
-4. 具體指出主要的問題類型（例如常常漏字、或常常需要重新開始），並給一個簡單的、中文描述的練習建議。
+3. 【長度】大約 1 到 2 句話，簡潔一點，不要太長。
+4. 只針對「{topic_name}」這個面向講，不要提到其他不相關的面向，並給一個簡單的、中文描述的練習建議。
 
 請「只」回傳一個 JSON 物件，不要有任何其他文字說明或 markdown 標記，格式如下：
 {{"feedback": "這裡放你寫的回饋文字"}}
@@ -642,7 +662,66 @@ def call_ollama_wer_feedback(wer_stats):
     try:
         return str(result.get("feedback", "")).strip()
     except Exception as e:
-        print(f"🚨 Ollama 發音回饋格式異常: {e}, 原始回傳: {result}", flush=True)
+        print(f"🚨 Ollama {category} 分項回饋格式異常: {e}, 原始回傳: {result}", flush=True)
+        return ""
+
+
+def call_ollama_word_pronunciation_tip(reference_word, hypothesis_word, category):
+    """
+    💡 【核心新增】：針對「單一個發音錯誤」，請 Ollama 根據英文字典中這個字的音節拆分，
+       用簡單易懂、20 個字以內的繁體中文，教小朋友這個字該怎麼念。
+       這是「點擊紅字」時即時呼叫的（不是上傳時就先算好存起來），
+       因為錯誤字數可能很多，沒必要每次上傳都先把所有字都問過一輪 Ollama。
+
+    參數：
+        reference_word: 正確的英文字（課文原文）
+        hypothesis_word: 使用者實際念出來被辨識到的字（可能是 '—' 代表漏念）
+        category: 這個錯誤屬於哪一類（deletions/insertions/substitutions/repair_xxx），純參考用
+
+    回傳：
+        20 字以內的繁體中文教學提示字串；失敗時回傳空字串
+    """
+    if not reference_word or not reference_word.strip() or reference_word.strip() == '—':
+        return ""
+
+    said_desc = f"小朋友把它念成了「{hypothesis_word}」" if hypothesis_word and hypothesis_word.strip() not in ('', '—', '–') else "小朋友沒有念出這個字"
+
+    prompt = f"""你是一位兒童英語發音教練。這個英文字是「{reference_word}」，{said_desc}。
+
+請根據這個英文字在字典裡的正確音節拆分方式，教小朋友怎麼正確念出這個字。以下規則非常重要，一定要遵守：
+
+1. 【語言規則，最重要】整句話「只能使用繁體中文」，絕對不可以出現任何日文、韓文、簡體字。
+   除了「{reference_word}」這個目標英文字本身可以原樣出現以外，不能有任何其他英文單字或英文片語
+   出現在句子裡（例如絕對不可以寫成「這個字分成 three part」這種中英夾雜的句子，這是錯誤示範）。
+   再次強調不可以中英夾雜 你很常出現 英文的one part two part three part，這是錯誤示範!!!!!!!
+2. 【標點符號】只能用中文常見的標點（，。！），不要用斜線「/」、頓號以外的符號，或任何看起來像程式碼、
+   陣列、括號編號的寫法。
+3. 【長度與完整性】用一到兩句「完整」的話說完，總長度大約在 15 到 35 個中文字之間，
+   「一定要把話講完，不能寫到一半就停止」，寧可稍微短一點也要講完整。
+4. 【內容】可以參考英文字典的音節，根據音節拆分，用簡單好懂的方式描述嘴型、重音或發音方式，讓小朋友聽得懂該怎麼念。
+5. 【語氣】親切、鼓勵，像在教小朋友一樣，用口語化的中文，不要條列式。
+6. 【範例】可以說 : 這個字念[正確發音]，要分成[幾個，你要去看字典該單字是幾個音節]音節念。前面一個音念'什麼'。中間一個音念'什麼'，最後一個音念'什麼'
+
+正確範例（格式參考，內容請根據「{reference_word}」自己生成）：
+「這個字要分成兩段念，前面輕輕帶過，後面的音要拉長一點，重音放在後半段喔！」
+
+錯誤示範（絕對不要出現這種寫法）：
+「This word 分成 two part，first part 念輕一點」← 中英夾雜，禁止
+「wa-ter，重音在第一音節」← 出現斜線或奇怪符號，禁止
+
+請「只」回傳一個 JSON 物件，不要有任何其他文字說明或 markdown 標記，格式如下：
+{{"tip": "這裡放你寫的教學提示，完整的一到兩句話"}}
+"""
+
+    result = _call_ollama(prompt)
+    if not result:
+        return ""
+
+    try:
+        tip = str(result.get("tip", "")).strip()
+        return tip[:80]  # 保險：就算模型超字數，也強制截斷避免過長（但不要切在太短的位置，避免又變成講一半）
+    except Exception as e:
+        print(f"🚨 Ollama 單字發音提示格式異常: {e}, 原始回傳: {result}", flush=True)
         return ""
 
 
@@ -1062,8 +1141,9 @@ def upload_audio():
 
         # 🚀 【核心新增】：兩段「整份錄音」的文字回饋——
         #    一段是 nPVI/Varco 節奏語速的流暢度回饋，一段是發音正確度(WER)的回饋。
-        #    逐句的即時提示不會呼叫 Ollama（前端用固定範本秒開），這裡是給使用者事後
-        #    查看整體報告時看的、比較有深度的整體評語。
+        # 🚀 兩段「整份錄音」的文字回饋——
+        #    一段是 nPVI/Varco 節奏語速的流暢度回饋，逐句的即時提示不會呼叫 Ollama
+        #   （前端用固定範本秒開），這裡是給使用者事後查看整體報告時看的、比較有深度的整體評語。
         fluency_feedback_text = ""
         try:
             fluency_feedback_text = call_ollama_fluency_feedback(sentence_fluency)
@@ -1071,12 +1151,26 @@ def upload_audio():
         except Exception as ollama_err:
             print(f"🚨 呼叫 Ollama 流暢度回饋失敗: {ollama_err}", flush=True)
 
-        wer_feedback_text = ""
+        # 🚀 三個分項評語：完整度 / 準確度 / 流利度，各自獨立生成，
+        #    供使用者點擊對應標籤時個別顯示+TTS播放。
+        completeness_feedback_text = ""
+        accuracy_feedback_text = ""
+        wer_fluency_feedback_text = ""
         try:
-            wer_feedback_text = call_ollama_wer_feedback(wer_stats)
-            print(f"✅ Ollama 發音回饋完成: {wer_feedback_text}", flush=True)
+            completeness_feedback_text = call_ollama_wer_category_feedback('completeness', wer_stats)
+            print(f"✅ Ollama 完整度分項回饋完成: {completeness_feedback_text}", flush=True)
         except Exception as ollama_err:
-            print(f"🚨 呼叫 Ollama 發音回饋失敗: {ollama_err}", flush=True)
+            print(f"🚨 呼叫 Ollama 完整度分項回饋失敗: {ollama_err}", flush=True)
+        try:
+            accuracy_feedback_text = call_ollama_wer_category_feedback('accuracy', wer_stats)
+            print(f"✅ Ollama 準確度分項回饋完成: {accuracy_feedback_text}", flush=True)
+        except Exception as ollama_err:
+            print(f"🚨 呼叫 Ollama 準確度分項回饋失敗: {ollama_err}", flush=True)
+        try:
+            wer_fluency_feedback_text = call_ollama_wer_category_feedback('fluency', wer_stats)
+            print(f"✅ Ollama 流利度分項回饋完成: {wer_fluency_feedback_text}", flush=True)
+        except Exception as ollama_err:
+            print(f"🚨 呼叫 Ollama 流利度分項回饋失敗: {ollama_err}", flush=True)
 
         # 🔧 核心修正：projects.overall_fluency_score_100（整個「專案」的分數）
         #    *只有整篇模式 (whole)* 才能直接沿用這一段的分數 —— 因為整篇模式從頭到尾只有這一筆錄音，
@@ -1111,7 +1205,9 @@ def upload_audio():
             "word_timings": word_timings,
             "sentence_fluency": sentence_fluency,
             "fluency_feedback_text": fluency_feedback_text,
-            "wer_feedback_text": wer_feedback_text,
+            "completeness_feedback_text": completeness_feedback_text,
+            "accuracy_feedback_text": accuracy_feedback_text,
+            "wer_fluency_feedback_text": wer_fluency_feedback_text,
             "raw_wer_output": full_wer_raw_json,
             "raw_npvi_output": full_npvi_raw_json
         }
@@ -1124,26 +1220,26 @@ def upload_audio():
                                        alignment_report, npvi, varco, whisper_text_path, textgrid_path,
                                        score_completeness, score_accuracy, score_fluency, score_grammar,
                                        fluency_score_100, fluency_yellow_count, fluency_red_count,
-                                       fluency_feedback_text, wer_feedback_text)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                       fluency_feedback_text, completeness_feedback_text, accuracy_feedback_text, wer_fluency_feedback_text)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                ON DUPLICATE KEY UPDATE
                   file_path = %s, wer = %s, total_words = %s, error_count = %s, alignment_report = %s,
                   npvi = %s, varco = %s, whisper_text_path = %s, textgrid_path = %s,
                   score_completeness = %s, score_accuracy = %s, score_fluency = %s, score_grammar = %s,
                   fluency_score_100 = %s, fluency_yellow_count = %s, fluency_red_count = %s,
-                  fluency_feedback_text = %s, wer_feedback_text = %s
+                  fluency_feedback_text = %s, completeness_feedback_text = %s, accuracy_feedback_text = %s, wer_fluency_feedback_text = %s
                """
             cursor.execute(insert_sql, (
                 project_id, para_idx, db_path, wer_score, total_words, error_count, alignment_json,
                 npvi_score, varco_score, whisper_text_db_path, textgrid_db_path,
                 score_completeness, score_accuracy, score_fluency, score_grammar,
                 recording_fluency_score_100, fluency_yellow_count, fluency_red_count,
-                fluency_feedback_text, wer_feedback_text,
+                fluency_feedback_text, completeness_feedback_text, accuracy_feedback_text, wer_fluency_feedback_text,
                 db_path, wer_score, total_words, error_count, alignment_json,
                 npvi_score, varco_score, whisper_text_db_path, textgrid_db_path,
                 score_completeness, score_accuracy, score_fluency, score_grammar,
                 recording_fluency_score_100, fluency_yellow_count, fluency_red_count,
-                fluency_feedback_text, wer_feedback_text
+                fluency_feedback_text, completeness_feedback_text, accuracy_feedback_text, wer_fluency_feedback_text
             ))
             conn.commit()
         except Exception as db_err:
@@ -1178,7 +1274,9 @@ def upload_audio():
                 "overall_fluency_score_100": overall_fluency_score_100,
                 "recording_fluency_score_100": recording_fluency_score_100,
                 "fluency_feedback_text": fluency_feedback_text,
-                "wer_feedback_text": wer_feedback_text
+                "completeness_feedback_text": completeness_feedback_text,
+                "accuracy_feedback_text": accuracy_feedback_text,
+                "wer_fluency_feedback_text": wer_fluency_feedback_text
             }
         })
 
@@ -1186,6 +1284,71 @@ def upload_audio():
         if 'cursor' in locals() and cursor: cursor.close()
         if 'conn' in locals() and conn: conn.close()
         return jsonify({"status": "error", "message": f"後端 upload_audio 發生未預期崩潰: {str(global_err)}"})
+
+@app.route('/get_word_pronunciation_tip', methods=['POST'])
+def get_word_pronunciation_tip():
+    """
+    💡 前端點擊某個紅字錯誤時呼叫這支 API。
+       核心邏輯：先查 word_pronunciation_tips 這張快取表，
+       如果同樣的 (正確字, 錯誤字, 類別) 組合之前已經問過 Ollama，
+       直接回傳存好的內容——確保「同一個錯誤永遠得到一模一樣的提示」，
+       不會每次點都重新生成、每次答案都不一樣。
+       只有第一次遇到全新的組合，才會真的去問 Ollama，問完立刻存進快取表。
+    """
+    data = request.json or {}
+    reference_word = (data.get('reference') or '').strip()
+    hypothesis_word = (data.get('hypothesis') or '').strip()
+    category = (data.get('category') or '').strip()
+
+    if not reference_word or reference_word == '—':
+        return jsonify({"status": "error", "message": "缺少正確課文原字，無法產生教學提示"})
+
+    conn = get_db_connection()
+    if conn is None:
+        return jsonify({"status": "error", "message": "資料庫連線失敗，無法查詢/寫入快取"})
+
+    cursor = conn.cursor(dictionary=True)
+    try:
+        # 1. 先查快取表，有的話直接回傳，不呼叫 Ollama
+        cursor.execute(
+            "SELECT tip_text FROM word_pronunciation_tips WHERE reference_word = %s AND hypothesis_word = %s AND category = %s",
+            (reference_word, hypothesis_word, category)
+        )
+        cached = cursor.fetchone()
+        if cached and cached.get('tip_text'):
+            cursor.close()
+            conn.close()
+            return jsonify({"status": "success", "tip": cached['tip_text'], "word": reference_word, "cached": True})
+
+        # 2. 沒有快取，真的問一次 Ollama
+        tip = call_ollama_word_pronunciation_tip(reference_word, hypothesis_word, category)
+        if not tip:
+            cursor.close()
+            conn.close()
+            return jsonify({"status": "error", "message": "Ollama 沒有回應有效內容"})
+
+        # 3. 存進快取表，之後同樣的組合就不用再問了
+        try:
+            cursor.execute(
+                """INSERT INTO word_pronunciation_tips (reference_word, hypothesis_word, category, tip_text)
+                   VALUES (%s, %s, %s, %s)
+                   ON DUPLICATE KEY UPDATE tip_text = VALUES(tip_text)""",
+                (reference_word, hypothesis_word, category, tip)
+            )
+            conn.commit()
+        except Exception as db_write_err:
+            print(f"🚨 寫入 word_pronunciation_tips 快取失敗: {db_write_err}", flush=True)
+
+        cursor.close()
+        conn.close()
+        return jsonify({"status": "success", "tip": tip, "word": reference_word, "cached": False})
+
+    except Exception as e:
+        if cursor: cursor.close()
+        if conn: conn.close()
+        print(f"🚨 產生單字發音提示失敗: {e}", flush=True)
+        return jsonify({"status": "error", "message": str(e)})
+
 
 @app.route('/get_project_total_report', methods=['GET'])
 def get_project_total_report():
@@ -1214,7 +1377,7 @@ def get_project_total_report():
         sql = """
             SELECT paragraph_index, file_path, wer, total_words, error_count, alignment_report, npvi, varco,
                    score_completeness, score_accuracy, score_fluency, score_grammar, fluency_score_100,
-                   fluency_feedback_text, wer_feedback_text
+                   fluency_feedback_text, completeness_feedback_text, accuracy_feedback_text, wer_fluency_feedback_text
             FROM recordings
             WHERE project_id = %s
             ORDER BY paragraph_index ASC
@@ -1261,7 +1424,9 @@ def get_project_total_report():
                     "score_grammar": row['score_grammar'] if row['score_grammar'] is not None else 0.0,
                     "fluency_score_100": row['fluency_score_100'] if row['fluency_score_100'] is not None else 0.0,
                     "fluency_feedback_text": row['fluency_feedback_text'] or "",
-                    "wer_feedback_text": row['wer_feedback_text'] or ""
+                    "completeness_feedback_text": row['completeness_feedback_text'] or "",
+                    "accuracy_feedback_text": row['accuracy_feedback_text'] or "",
+                    "wer_fluency_feedback_text": row['wer_fluency_feedback_text'] or ""
                 })
 
                 if row['wer'] is not None:
@@ -1288,7 +1453,9 @@ def get_project_total_report():
                     "score_fluency": None,
                     "score_grammar": None,
                     "fluency_feedback_text": None,
-                    "wer_feedback_text": None,
+                    "completeness_feedback_text": None,
+                    "accuracy_feedback_text": None,
+                    "wer_fluency_feedback_text": None,
                     "fluency_score_100": None
                 })
 

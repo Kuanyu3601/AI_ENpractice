@@ -3064,6 +3064,10 @@ function renderChunkTranscriptRow(layout, targetCategory, chunkFluencyMap) {
             let hypStyle = `color: ${hypColorDefault}; font-weight: 500;`;
             let displayHyp = hyp;
 
+            let wordDivClass = '';
+            let wordDivExtraAttrs = '';
+            let megaphoneHtml = '';
+
             if (isFluencyMode) {
                 // 💡 流暢度模式：不管這個字本身是不是 WER 錯誤，只要整句被判定黃/紅，字就套用該顏色
                 if (sentenceWordColor) {
@@ -3073,15 +3077,23 @@ function renderChunkTranscriptRow(layout, targetCategory, chunkFluencyMap) {
             } else if (isTargetError) {
                 hypStyle = 'color: #e63946; font-weight: 800; background: #fee2e2; padding: 2px 4px; border-radius: 4px; border-bottom: 2px solid #e63946;';
                 if (cat === 'delete') displayHyp = 'NULL';
+                // 💡 這個字是目前篩選類別命中的錯誤：可以點擊查詢發音教學提示，旁邊也放一個大聲公可以直接聽正確發音
+                wordDivClass = 'wer-error-word-badge';
+                const refEsc = ref.replace(/"/g, '&quot;');
+                const hypEsc = hyp.replace(/"/g, '&quot;');
+                wordDivExtraAttrs = ` data-ref="${refEsc}" data-hyp="${hypEsc}" data-cat="${targetCategory || ''}"`;
+                if (ref && ref !== '—') {
+                    megaphoneHtml = `<span class="word-megaphone" onclick="event.stopPropagation(); window.speakEnglishWord('${ref.replace(/'/g, "\\'")}');" title="點擊聽正確發音" style="cursor:pointer; font-size:0.85rem; margin-left:2px;">🔊</span>`;
+                }
             } else if (hyp === '—' || !hyp) {
                 displayHyp = '-';
                 hypStyle = 'color: #6b7280; opacity: 0.6;';
             }
 
             return `
-                <div style="display:flex; flex-direction:column; align-items:center; margin: 4px 6px; min-width: 34px; flex: 0 0 auto; white-space:nowrap;">
+                <div class="${wordDivClass}"${wordDivExtraAttrs} style="display:flex; flex-direction:column; align-items:center; margin: 4px 6px; min-width: 34px; flex: 0 0 auto; white-space:nowrap; ${isTargetError && !isFluencyMode ? 'cursor:pointer; position:relative;' : ''}">
                     <span style="font-size:0.95rem; color:${refColor}; font-weight:600;">${ref === '—' ? '-' : ref}</span>
-                    <span style="font-size:0.9rem; ${hypStyle}">${displayHyp}</span>
+                    <span style="font-size:0.9rem; ${hypStyle}">${displayHyp}</span>${megaphoneHtml}
                 </div>
             `;
         }).join('');
@@ -3310,11 +3322,213 @@ function speakChineseFeedback(text, onEndCallback) {
     setTimeout(speakNext, 60);
 }
 
+// ══════════════════════════════════════════════════
+//  🔊 點紅字聽正確發音（純 TTS，不用問 Ollama）
+// ══════════════════════════════════════════════════
+window.speakEnglishWord = function(word) {
+    if (!word) return;
+    if (speechSynthesis.speaking) speechSynthesis.cancel();
+    const utt = new SpeechSynthesisUtterance(word);
+    utt.lang = 'en-US';
+    const voices = speechSynthesis.getVoices() || [];
+    const voice = voices.find(v => v.lang === 'en-US');
+    if (voice) utt.voice = voice;
+    utt.rate = 0.85;
+    setTimeout(() => speechSynthesis.speak(utt), 60);
+};
+
+// ══════════════════════════════════════════════════
+//  💬 點紅字看「音節拆解教學提示」— 即時跟後端要，不預先產生
+// ══════════════════════════════════════════════════
+/**
+ * 💡 點擊一個紅字錯誤時呼叫：即時打 /get_word_pronunciation_tip，
+ *    請 Ollama 根據這個字的音節拆分，生成一句 20 字以內的繁體中文教學提示，
+ *    用一個小泡泡顯示在那個字下方；點擊泡泡文字會用 TTS 唸出這句提示。
+ */
+window.showWordPronunciationTip = async function(el) {
+    // 先清掉畫面上其他還開著的提示泡泡，同一時間只顯示一個
+    document.querySelectorAll('.word-tip-bubble').forEach(b => b.remove());
+
+    const ref = el.dataset.ref || '';
+    const hyp = el.dataset.hyp || '';
+    const cat = el.dataset.cat || '';
+    if (!ref) return;
+
+    const bubble = document.createElement('div');
+    bubble.className = 'word-tip-bubble';
+    bubble.style.cssText = 'position:absolute; top:100%; left:50%; transform:translateX(-50%); margin-top:4px; ' +
+        'background:#1f2937; color:#fff; padding:6px 10px; border-radius:8px; font-size:0.75rem; white-space:nowrap; ' +
+        'z-index:30; cursor:pointer; box-shadow:0 4px 10px rgba(0,0,0,0.25);';
+    bubble.textContent = '教練思考中…';
+    el.appendChild(bubble);
+
+    try {
+        const resp = await fetch('/get_word_pronunciation_tip', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ reference: ref, hypothesis: hyp, category: cat })
+        });
+        const data = await resp.json();
+        if (data.status === 'success' && data.tip) {
+            bubble.textContent = data.tip + ' 🔊';
+            bubble.dataset.tipText = data.tip;
+            bubble.onclick = (ev) => {
+                ev.stopPropagation();
+                speakChineseFeedback(bubble.dataset.tipText);
+            };
+        } else {
+            bubble.textContent = '暫時無法取得提示';
+        }
+    } catch (err) {
+        bubble.textContent = '連線失敗，稍後再試';
+    }
+};
+
+// 💡 點擊提示泡泡以外的地方，自動關掉泡泡
+document.addEventListener('click', (e) => {
+    if (e.target.closest('.word-tip-bubble') || e.target.closest('.wer-error-word-badge')) return;
+    document.querySelectorAll('.word-tip-bubble').forEach(b => b.remove());
+});
+
+// ══════════════════════════════════════════════════
+//  📋 點擊「完整度/準確度/流利度」標籤 → 右側浮框顯示該分項 LLM 評語 + TTS
+// ══════════════════════════════════════════════════
+function ensureCategoryFeedbackPopup() {
+    let popup = document.getElementById('category-feedback-popup');
+    if (popup) return popup;
+
+    popup = document.createElement('div');
+    popup.id = 'category-feedback-popup';
+    popup.style.cssText = 'display:none; position:fixed; top:90px; right:24px; width:320px; max-width:88vw; ' +
+        'background:#fff; border:2px solid #e2e8f0; border-radius:14px; box-shadow:0 10px 30px rgba(0,0,0,0.18); ' +
+        'padding:18px; z-index:9999;';
+    popup.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+            <div style="display:flex; align-items:center; gap:8px;">
+                <span id="category-feedback-title" style="font-weight:bold; font-size:1rem; color:#1f2937;"></span>
+                <span id="category-feedback-score" style="font-size:0.8rem; font-weight:bold; color:#fff; background:#64748b; padding:2px 10px; border-radius:12px; display:none;"></span>
+            </div>
+            <span id="category-feedback-close" style="cursor:pointer; font-size:1.3rem; color:#94a3b8; line-height:1;">✕</span>
+        </div>
+        <div id="category-feedback-text" style="font-size:0.85rem; color:#334155; line-height:1.7; margin-bottom:14px;"></div>
+        <div style="display:flex; gap:14px; align-items:center;">
+            <span id="category-feedback-pause" style="cursor:pointer; font-size:1.3rem; display:none;" title="暫停/繼續">⏸</span>
+            <span id="category-feedback-replay" style="cursor:pointer; font-size:1.3rem; display:none;" title="重播">🔁</span>
+        </div>
+    `;
+    document.body.appendChild(popup);
+
+    const closeBtn = document.getElementById('category-feedback-close');
+    const pauseIcon = document.getElementById('category-feedback-pause');
+    const replayIcon = document.getElementById('category-feedback-replay');
+
+    closeBtn.onclick = () => {
+        popup.style.display = 'none';
+        speechSynthesis.cancel();
+    };
+    pauseIcon.onclick = () => {
+        if (!speechSynthesis.speaking) return;
+        if (speechSynthesis.paused) {
+            speechSynthesis.resume();
+            pauseIcon.textContent = '⏸';
+        } else {
+            speechSynthesis.pause();
+            pauseIcon.textContent = '▶';
+        }
+    };
+    replayIcon.onclick = () => {
+        const text = popup.dataset.lastText || '';
+        if (!text) return;
+        replayIcon.style.display = 'none';
+        pauseIcon.style.display = 'inline';
+        pauseIcon.textContent = '⏸';
+        speakChineseFeedback(text, () => {
+            pauseIcon.style.display = 'none';
+            replayIcon.style.display = 'inline';
+        });
+    };
+
+    // 💡 點浮框外面的任意地方就關閉（點觸發浮框的標籤本身除外，避免跟它自己的 onclick 打架）
+    document.addEventListener('click', (e) => {
+        if (popup.style.display === 'none') return;
+        if (popup.contains(e.target)) return;
+        if (e.target.closest('.category-label-clickable')) return;
+        popup.style.display = 'none';
+        speechSynthesis.cancel();
+    });
+
+    return popup;
+}
+
+window.showCategoryFeedback = function(title, text, scoreText) {
+    const popup = ensureCategoryFeedbackPopup();
+    document.getElementById('category-feedback-title').textContent = title;
+    document.getElementById('category-feedback-text').textContent = text && text.trim() ? text : '（這個面向目前沒有回饋內容）';
+    popup.dataset.lastText = text || '';
+    popup.style.display = 'block';
+
+    const scoreEl = document.getElementById('category-feedback-score');
+    if (scoreEl) {
+        if (scoreText) {
+            scoreEl.textContent = scoreText;
+            scoreEl.style.display = 'inline-block';
+        } else {
+            scoreEl.style.display = 'none';
+        }
+    }
+
+    const pauseIcon = document.getElementById('category-feedback-pause');
+    const replayIcon = document.getElementById('category-feedback-replay');
+    pauseIcon.style.display = 'none';
+    replayIcon.style.display = 'none';
+    pauseIcon.textContent = '⏸';
+
+    if (text && text.trim()) {
+        pauseIcon.style.display = 'inline';
+        speakChineseFeedback(text, () => {
+            pauseIcon.style.display = 'none';
+            replayIcon.style.display = 'inline';
+        });
+    }
+};
+
+/** 💡 從按鈕的 stripId 讀取對應分項評語文字 + 分數，開啟浮框 */
+window.openCategoryFeedbackForStrip = function(stripId, category) {
+    const widget = document.getElementById(`${stripId}-chunkwidget`);
+    if (!widget) return;
+
+    const map = {
+        fluency: {
+            title: '🎯 口語流暢評語',
+            text: widget.dataset.fluencyFeedback || '',
+            score: widget.dataset.fluencyScore100 ? `${Math.round(parseFloat(widget.dataset.fluencyScore100))}/100` : ''
+        },
+        completeness: {
+            title: '📋 完整度評語',
+            text: widget.dataset.completenessFeedback || '',
+            score: widget.dataset.scoreCompleteness ? `${parseFloat(widget.dataset.scoreCompleteness).toFixed(1)}/5` : ''
+        },
+        accuracy: {
+            title: '📋 準確度評語',
+            text: widget.dataset.accuracyFeedback || '',
+            score: widget.dataset.scoreAccuracy ? `${parseFloat(widget.dataset.scoreAccuracy).toFixed(1)}/5` : ''
+        },
+        fluency_wer: {
+            title: '📋 流利度評語',
+            text: widget.dataset.werFluencyFeedback || '',
+            score: widget.dataset.scoreFluencyWer ? `${parseFloat(widget.dataset.scoreFluencyWer).toFixed(1)}/5` : ''
+        }
+    };
+    const item = map[category];
+    if (!item) return;
+    window.showCategoryFeedback(item.title, item.text, item.score);
+};
+
 /**
  * 💡 建立完整的「WaveSurfer 波形(疊加一深一淺色塊做分段) + 逐字稿對照 + 篩選按鈕」小工具 HTML。
  *    chunks 直接用 extendedReport.chunk_details（NPVI 回傳的 chunk_results，含 xmin/xmax/label）。
  */
-function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl, wordTimings, sentenceFluency, fluencyFeedbackText, werFeedbackText) {
+function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl, wordTimings, sentenceFluency, fluencyFeedbackText, completenessFeedbackText, accuracyFeedbackText, werFluencyFeedbackText, fluencyScore100, scoreCompleteness, scoreAccuracy, scoreFluencyWer) {
     const WORD_SLOT_WIDTH = 50;  // 每個字（含上下兩行）大約需要的寬度
     const MIN_PX_PER_SEC = 60;   // 每秒最少像素，避免音檔很長、字很少時比例被拉得太小
 
@@ -3387,7 +3601,13 @@ function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl, w
              data-audio-url="${cleanAudioUrl}" data-base-px-per-sec="${basePxPerSec}" data-active-category=""
              data-chunk-fluency='${JSON.stringify(chunkFluencyMap).replace(/'/g, "&apos;")}'
              data-fluency-feedback="${(fluencyFeedbackText || '').replace(/"/g, '&quot;')}"
-             data-wer-feedback="${(werFeedbackText || '').replace(/"/g, '&quot;')}">
+             data-completeness-feedback="${(completenessFeedbackText || '').replace(/"/g, '&quot;')}"
+             data-accuracy-feedback="${(accuracyFeedbackText || '').replace(/"/g, '&quot;')}"
+             data-wer-fluency-feedback="${(werFluencyFeedbackText || '').replace(/"/g, '&quot;')}"
+             data-fluency-score100="${fluencyScore100 != null ? fluencyScore100 : ''}"
+             data-score-completeness="${scoreCompleteness != null ? scoreCompleteness : ''}"
+             data-score-accuracy="${scoreAccuracy != null ? scoreAccuracy : ''}"
+             data-score-fluency-wer="${scoreFluencyWer != null ? scoreFluencyWer : ''}">
             <div style="font-size: 0.9rem; font-weight: bold; color: #475569; margin-bottom: 8px;">
                 🎵 錄音回放
             </div>
@@ -3398,7 +3618,7 @@ function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl, w
 
                 <!-- 💡 完整度：刪除 + 插入，綠色底框 -->
                 <div style="border:2px solid #16a34a; border-radius:10px; padding:4px 8px 6px; background:#f0fdf4; display:flex; flex-direction:column; gap:4px;">
-                    <span style="font-size:0.65rem; font-weight:bold; color:#16a34a;">完整度</span>
+                    <span class="category-label-clickable" onclick="window.openCategoryFeedbackForStrip('${stripId}','completeness')" style="font-size:0.85rem; font-weight:bold; color:#16a34a; text-align:center; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:2px;">完整度<span style="font-size:0.7rem;">👆</span></span>
                     <div style="display:flex; gap:6px;">
                         <button class="wer-filter-btn-chunked" data-original-bg="#fff" data-original-color="#16a34a" onclick="window.switchWerFilterChunked(this, 'deletions', '${stripId}')" style="padding: 5px 12px; border:none; background: #fff; color: #16a34a; border-radius: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size:0.85rem;">刪除 (${errorCounts.deletions})</button>
                         <button class="wer-filter-btn-chunked" data-original-bg="#fff" data-original-color="#16a34a" onclick="window.switchWerFilterChunked(this, 'insertions', '${stripId}')" style="padding: 5px 12px; border:none; background: #fff; color: #16a34a; border-radius: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size:0.85rem;">插入 (${errorCounts.insertions})</button>
@@ -3407,13 +3627,13 @@ function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl, w
 
                 <!-- 💡 準確度：替換，藍色底框 -->
                 <div style="border:2px solid #2563eb; border-radius:10px; padding:4px 8px 6px; background:#eff6ff; display:flex; flex-direction:column; gap:4px;">
-                    <span style="font-size:0.65rem; font-weight:bold; color:#2563eb;">準確度</span>
+                    <span class="category-label-clickable" onclick="window.openCategoryFeedbackForStrip('${stripId}','accuracy')" style="font-size:0.85rem; font-weight:bold; color:#2563eb; text-align:center; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:2px;">準確度<span style="font-size:0.7rem;">👆</span></span>
                     <button class="wer-filter-btn-chunked" data-original-bg="#fff" data-original-color="#2563eb" onclick="window.switchWerFilterChunked(this, 'substitutions', '${stripId}')" style="padding: 5px 12px; border:none; background: #fff; color: #2563eb; border-radius: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size:0.85rem;">替換 (${errorCounts.substitutions})</button>
                 </div>
 
                 <!-- 💡 流利度：重複 + 嘗試修正 + 重新開始，橘色底框 -->
                 <div style="border:2px solid #d97706; border-radius:10px; padding:4px 8px 6px; background:#fffbeb; display:flex; flex-direction:column; gap:4px;">
-                    <span style="font-size:0.65rem; font-weight:bold; color:#d97706;">流利度</span>
+                    <span class="category-label-clickable" onclick="window.openCategoryFeedbackForStrip('${stripId}','fluency_wer')" style="font-size:0.85rem; font-weight:bold; color:#d97706; text-align:center; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:2px;">流利度<span style="font-size:0.7rem;">👆</span></span>
                     <div style="display:flex; gap:6px; flex-wrap:wrap;">
                         <button class="wer-filter-btn-chunked" data-original-bg="#fff" data-original-color="#d97706" onclick="window.switchWerFilterChunked(this, 'repair_repetition', '${stripId}')" style="padding: 5px 12px; border:none; background: #fff; color: #d97706; border-radius: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size:0.85rem;">重複 (${errorCounts.repair_repetition})</button>
                         <button class="wer-filter-btn-chunked" data-original-bg="#fff" data-original-color="#d97706" onclick="window.switchWerFilterChunked(this, 'repair_attempt', '${stripId}')" style="padding: 5px 12px; border:none; background: #fff; color: #d97706; border-radius: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size:0.85rem;">嘗試修正 (${errorCounts.repair_attempt})</button>
@@ -3422,9 +3642,13 @@ function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl, w
                 </div>
 
                 <div style="width:1px; height:22px; background:#e2e8f0; margin: 0 4px;"></div>
-                <button class="wer-filter-btn-chunked" onclick="window.switchWerFilterChunked(this, 'fluency', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;" title="按句子比對 nPVI/Varco 標準範圍：黃色=部分不合格，紅色=兩項都不合格，點擊會語音播放整體評語">流暢度 (${fluencyFlaggedCount})</button>
-                <span id="${stripId}-replay-icon" onclick="window.replayLastFeedback('${stripId}')" title="重播剛剛的語音評語" style="display:none; cursor:pointer; font-size:1.1rem; padding:2px 6px;">🔁</span>
-                <span id="${stripId}-pause-icon" onclick="window.togglePauseFeedback('${stripId}')" title="暫停/繼續播放" style="display:none; cursor:pointer; font-size:1.1rem; padding:2px 6px;">⏸</span>
+
+                <!-- 💡 口語流暢：跟完整度/準確度/流利度一樣的色框標籤+按鈕結構，紫色。
+                     標籤本身點擊開浮框（分數+評語+TTS），裡面的「流暢度」按鈕維持原本的篩選/跳轉功能。 -->
+                <div style="border:2px solid #9333ea; border-radius:10px; padding:4px 8px 6px; background:#faf5ff; display:flex; flex-direction:column; gap:4px;">
+                    <span class="category-label-clickable" onclick="window.openCategoryFeedbackForStrip('${stripId}','fluency')" style="font-size:0.85rem; font-weight:bold; color:#9333ea; text-align:center; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:2px;">口語流暢<span style="font-size:0.7rem;">👆</span></span>
+                    <button class="wer-filter-btn-chunked" data-original-bg="#fff" data-original-color="#9333ea" onclick="window.switchWerFilterChunked(this, 'fluency', '${stripId}')" style="padding: 5px 12px; border:none; background: #fff; color: #9333ea; border-radius: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size:0.85rem;" title="按句子比對 nPVI/Varco 標準範圍：黃色=部分不合格，紅色=兩項都不合格">流暢度 (${fluencyFlaggedCount})</button>
+                </div>
             </div>
 
             <div style="display:flex; align-items:center; gap:10px; margin-bottom: 10px; flex-wrap: wrap;">
@@ -3497,62 +3721,10 @@ window.switchWerFilterChunked = function(btn, errorType, stripId) {
         showToast(isFluencyMode ? '這份錄音的句子流暢度都合格 🎉' : '這個類別目前沒有任何錯誤 🎉');
     }
 
-    // 💡 只有「流暢度」按鈕才會觸發語音播放整體評語，其餘 6 個 WER 類別按鈕只負責切換文字標色，
-    //    不會有任何聲音，避免點擊分類按鈕卻意外一直重複播放同一段評語。
-    const replayIcon = document.getElementById(`${stripId}-replay-icon`);
-    const pauseIcon = document.getElementById(`${stripId}-pause-icon`);
-
-    if (isFluencyMode) {
-        const feedbackText = widget.dataset.fluencyFeedback || '';
-        if (replayIcon) replayIcon.style.display = 'none';
-        if (pauseIcon) { pauseIcon.style.display = 'none'; pauseIcon.textContent = '⏸'; }
-
-        if (feedbackText) {
-            widget.dataset.lastFeedbackText = feedbackText;
-            if (pauseIcon) pauseIcon.style.display = 'inline';
-            speakChineseFeedback(feedbackText, () => {
-                if (replayIcon) replayIcon.style.display = 'inline';
-                if (pauseIcon) pauseIcon.style.display = 'none';
-            });
-        }
-    } else {
-        // 💡 切到其他分類時，如果評語還在播放中，直接停掉，避免背景一直放著跟目前畫面對不上
-        if (speechSynthesis.speaking) speechSynthesis.cancel();
-        if (replayIcon) replayIcon.style.display = 'none';
-        if (pauseIcon) pauseIcon.style.display = 'none';
-    }
-};
-
-/** 💡 重播上一次播放過的流暢度整體評語語音 */
-window.replayLastFeedback = function(stripId) {
-    const widget = document.getElementById(`${stripId}-chunkwidget`);
-    if (!widget) return;
-    const text = widget.dataset.lastFeedbackText || '';
-    if (!text) return;
-
-    const replayIcon = document.getElementById(`${stripId}-replay-icon`);
-    const pauseIcon = document.getElementById(`${stripId}-pause-icon`);
-    if (replayIcon) replayIcon.style.display = 'none';
-    if (pauseIcon) { pauseIcon.style.display = 'inline'; pauseIcon.textContent = '⏸'; }
-
-    speakChineseFeedback(text, () => {
-        if (replayIcon) replayIcon.style.display = 'inline';
-        if (pauseIcon) pauseIcon.style.display = 'none';
-    });
-};
-
-/** 💡 暫停 / 繼續播放目前正在唸的評語語音 */
-window.togglePauseFeedback = function(stripId) {
-    const pauseIcon = document.getElementById(`${stripId}-pause-icon`);
-    if (!speechSynthesis.speaking) return;
-
-    if (speechSynthesis.paused) {
-        speechSynthesis.resume();
-        if (pauseIcon) pauseIcon.textContent = '⏸';
-    } else {
-        speechSynthesis.pause();
-        if (pauseIcon) pauseIcon.textContent = '▶';
-    }
+    // 💡 「流暢度」按鈕現在只負責篩選/標色（跟其他 6 個 WER 類別按鈕行為一致），
+    //    不再觸發浮框或語音——浮框改由旁邊獨立的「口語流暢」色框標籤負責（點擊呼叫 openCategoryFeedbackForStrip）。
+    //    切換到任何分類時，如果評語還在播放中，先停掉，避免背景一直放著跟目前畫面對不上。
+    if (speechSynthesis.speaking) speechSynthesis.cancel();
 };
 
 /**
@@ -3750,13 +3922,22 @@ function initChunkedAudioBlock(stripId) {
         });
     }
 
-    // 💡 點擊句子（逐字稿裡任一個字）：只有目前在「流暢度」篩選模式下才會觸發，
-    //    用 TTS 唸出這句正確版本的句子，讓小朋友聽到正確發音示範（不顯示任何提示文字）。
+    // 💡 點擊逐字稿：
+    //    - 流暢度模式：點任一個字，用 TTS 唸出整句正確版本（原本就有的行為）。
+    //    - WER 錯誤類別模式（重複/替換/刪除...等）：點擊「命中該類別的紅字」，
+    //      即時跟後端要一句音節拆解的發音教學提示，用小泡泡顯示在那個字下方。
     const transcriptRowEl = document.getElementById(`${stripId}-transcript`);
     if (transcriptRowEl) {
         transcriptRowEl.addEventListener('click', (e) => {
             if (dragMoved) return; // 剛剛是拖曳捲動，不是真的點擊，不要誤觸發
-            if (widget.dataset.activeCategory !== 'fluency') return; // 💡 只有流暢度模式才會點字出聲
+
+            const errorBadge = e.target.closest('.wer-error-word-badge');
+            if (errorBadge && widget.dataset.activeCategory && widget.dataset.activeCategory !== 'fluency') {
+                window.showWordPronunciationTip(errorBadge);
+                return;
+            }
+
+            if (widget.dataset.activeCategory !== 'fluency') return; // 💡 只有流暢度模式才會點字出聲唸整句
 
             const block = e.target.closest('.chunk-transcript-block');
             if (!block) return;
@@ -3899,7 +4080,9 @@ function renderMultipleParagraphsReport(paragraphList, globalStats, mode = 'segm
                 const actualNpviNum = parseFloat(singleParaNpvi) || 0;
                 const actualVarcoNum = parseFloat(singleParaVarco) || 0;
                 const fluencyFeedbackText = para.fluency_feedback_text || '';
-                const werFeedbackText = para.wer_feedback_text || '';
+                const completenessFeedbackText = para.completeness_feedback_text || '';
+                const accuracyFeedbackText = para.accuracy_feedback_text || '';
+                const werFluencyFeedbackText = para.wer_fluency_feedback_text || '';
 
                 const chartsHTML = `
                     <div style="display: flex; gap: 24px; width: 100%; flex-wrap: wrap;">
@@ -3925,7 +4108,11 @@ function renderMultipleParagraphsReport(paragraphList, globalStats, mode = 'segm
                 const chunkListForWidget = extendedReport.chunk_details || [];
                 const wordTimingsForWidget = extendedReport.word_timings || [];
                 const sentenceFluencyForWidget = extendedReport.sentence_fluency || [];
-                const chunkedAudioHTML = buildChunkedAudioBlock(stripId, chunkListForWidget, alignments, para.file_path || '', wordTimingsForWidget, sentenceFluencyForWidget, fluencyFeedbackText, werFeedbackText);
+                const chunkedAudioHTML = buildChunkedAudioBlock(
+                    stripId, chunkListForWidget, alignments, para.file_path || '', wordTimingsForWidget, sentenceFluencyForWidget,
+                    fluencyFeedbackText, completenessFeedbackText, accuracyFeedbackText, werFluencyFeedbackText,
+                    para.fluency_score_100, para.score_completeness, para.score_accuracy, para.score_fluency
+                );
 
                 body.innerHTML = chartsHTML + chunkedAudioHTML;
 
