@@ -72,7 +72,7 @@
     width: 280px;
     height: 100%;
     background: #fff;
-    box-shadow: -4px 0 20px rgba(0,0,0,0.12);
+    box-shadow: none;   /* 沒打開時不要陰影，避免從右邊緣暈出灰色光暈 */
     z-index: 101;
     padding: 32px 24px;
     display: flex;
@@ -82,7 +82,10 @@
     transform: translateX(100%);
     transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
 }
-.side-panel.active { transform: translateX(0); }
+.side-panel.active {
+    transform: translateX(0);
+    box-shadow: -4px 0 20px rgba(0,0,0,0.12);   /* 展開時才顯示陰影 */
+}
 
 .side-close {
     align-self: flex-end;
@@ -133,3 +136,9 @@
     transition: background 0.2s;
 }
 .side-change-pw:hover { background: #1a5aa8; }
+/* ── 手機版：讓出左側空間給側欄開合按鈕，避免跟 logo 重疊 ── */
+@media (max-width: 768px) {
+    nav {
+        padding-left: 56px;
+    }
+}

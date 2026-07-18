@@ -1009,6 +1009,8 @@ body, html {
 .record-section.whole-mode .lyric-current {
     padding-bottom: 56px !important;
 }
+
+.para-sidebar {
     width: 100px;
     flex-shrink: 0;  /* 不壓縮 */
     flex-grow: 0; 
@@ -1643,12 +1645,12 @@ body, html {
     height: 100vh;
     background: #fff;
     z-index: 400;
-    box-shadow: -6px 0 40px rgba(40,80,160,0.14);
+    
     transform: translateX(100%);
     transition: transform 0.32s cubic-bezier(0.25, 0.8, 0.25, 1);
     display: flex;
     flex-direction: column;
-    border-left: 1px solid rgba(60,120,200,0.1);
+    
 }
 
 .profile-panel.open {
@@ -1846,11 +1848,16 @@ body, html {
 }
 
 @media (max-width: 768px) {
-    .sidebar { display: none; }
-
+    
+    
     .app-container {
-        padding: 10px 10px 0;
+        padding: 2px 0px 0 0;
         gap: 0;
+    }
+
+    .main-chat {
+        margin-bottom:0px; 
+
     }
 
     .step-panel {
@@ -1864,6 +1871,7 @@ body, html {
     .profile-panel {
         width: 100%;
         max-width: 360px;
+        box-shadow: none;
     }
 
     .step-label { display: none; }
@@ -1880,7 +1888,7 @@ body, html {
         max-height: clamp(150px, 24vh, 220px);
     }
     .chat-header { height: 50px; }
-    .step-nav { padding: 10px 20px; }
+    .step-nav { padding: 6px 20px; }
     .step-panel { padding-top: 18px; padding-bottom: 18px; }
 }
 
@@ -2045,4 +2053,176 @@ body, html {
     word-break: break-word;
     user-select: none;
     white-space: pre-line;
+}
+
+/* ── 手機版：朗讀／遮擋按鈕改到文章上方 ── */
+@media (max-width: 768px) {
+    /* 朗讀／遮擋按鈕移到文章上方 + 側欄改為浮動覆蓋樣式 */
+.lyrics-wrapper {
+        flex-direction: column;   /* 原本是 row，手機改成上下排列 */
+        height: clamp(260px, 42vh, 420px);   /* 💡 字幕區加大（原本 clamp(200px, 34vh, 340px)） */
+        min-height: 220px;
+    }
+ 
+    .select-function {
+        width: 100%;
+        padding-top: 0;
+    }
+ 
+    .sf-btn-group {
+        flex-direction: row;      /* 兩顆按鈕改成橫向並排在上方 */
+        justify-content: center;
+        width: 100%;
+        padding-top: 0;
+        margin-bottom: 10px;
+    }
+ 
+    .sf-btn {
+        flex-direction: row;      /* icon 和文字改成同一行，比較不佔高度 */
+        width: auto;
+        height: auto;
+        padding: 8px 16px;
+        gap: 6px;
+    }
+ 
+.sidebar {
+        display: flex !important;   /* 蓋掉前面 .sidebar{display:none} 的規則 */
+        position: fixed;
+        top: 0;
+        left: 0;
+        height: 100%;
+        width: 240px;
+        max-width: 82vw;
+        margin: 0;
+        z-index: 400;
+        border-radius: 0 0 0 0;
+        
+        transform: translateX(-100%);
+        transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+    }
+ 
+    /* 沒有 is-collapsed，代表目前是「展開」狀態 → 滑入畫面覆蓋 */
+    .sidebar:not(.is-collapsed) {
+        transform: translateX(0);
+    }
+ 
+    /* 手機版收合：改用滑出畫面，而不是電腦版的 width:0 */
+    .sidebar.is-collapsed {
+        width: 240px;
+        max-width: 82vw;
+        opacity: 1;
+        overflow: hidden;
+        transform: translateX(-100%);
+        pointer-events: none;
+    }
+ 
+    /* 不管打開或沒打開，都不要漸層，改用單一素色 */
+    .sidebar {
+        background: #eaf3ff;
+    }
+ 
+    /* 側欄已經是 fixed，不再佔用 flex 空間，右側內容不需要再讓寬給它 */
+    .sidebar.is-collapsed ~ .main-chat .upload-section,
+    .sidebar.is-collapsed ~ .main-chat .record-main,
+    .sidebar:not(.is-collapsed) ~ .main-chat .upload-section,
+    .sidebar:not(.is-collapsed) ~ .main-chat .record-main {
+        max-width: 100%;
+    }
+
+    /* 側欄開合按鈕：手機版固定移到 navbar 左上角，兩顆統一大小方便對齊 */
+    .sidebar-show-btn,
+    .sidebar-toggle-btn {
+        position: fixed !important;
+        top: 19px;      /* 對齊 navbar 70px 高度的垂直置中位置 */
+        left: 12px;
+        width: 32px !important;
+        height: 32px !important;
+        z-index: 500;   /* 高於 navbar 的 z-index:10，確保浮在上面 */
+    }
+
+    /* 側欄標題「練習紀錄」讓出左邊空間，避免跟固定按鈕重疊 */
+    .sidebar-header {
+        padding-left: 54px;
+    }
+
+    /* ── 分段練習：段落選擇按鈕改橫向，移到朗讀/遮擋按鈕上方 ── */
+    .record-section {
+        flex-direction: column;   /* 原本是 row，改成上下堆疊，段落列自然跑到最上面 */
+    }
+
+    .para-sidebar {
+        width: 100%;
+        justify-content: center;
+        flex-direction: row;       /* 按鈕改橫向排列 */
+        align-items: center;
+        border-right: none;        /* 原本直向時右側的分隔線，橫向不需要 */
+        padding: 12px 12px;
+        overflow-x: auto;
+        overflow-y: visible;
+    }
+
+    .para-overview-strip {
+        flex-direction: row;       /* 圓形段落按鈕改橫向排列 */
+        flex-wrap: wrap;
+        justify-content: center;
+        padding: 0;
+        width: auto;
+    }
+
+    .paragraph-progress {
+        display: none;            /* 不要「段落 X / Y」文字，只保留按鈕 */
+    }
+
+    .record-content {
+        padding-left: 0;          /* 原本是幫直向段落列讓出的左邊距，橫向排列不需要了 */
+    }
+    
+    /* ── 整篇練習：沒有段落選擇列，比例要跟分段練習對齊，並把多出來的空間讓給字幕區 ── */
+    .record-section.whole-mode .record-content {
+        padding-left: 0;          /* 蓋掉全域設定的 20px，跟分段練習一致 */
+    }
+ 
+    .record-section.whole-mode .lyrics-wrapper {
+        height: clamp(300px, 52vh, 460px);   /* 沒有段落列佔用高度，字幕區可以更大（比分段練習再大一些） */
+    }
+
+    /* ── 縮小錄音／報告按鈕區的空間，讓給字幕區 ── */
+    .record-controls {
+        max-height: clamp(150px, 22vh, 220px);   /* 原本 clamp(190px, 28vh, 280px) */
+        gap: 10px;                                /* 原本 14px，元素間距也稍微收緊 */
+    }
+
+    /* ── 歷史紀錄側欄打開時，其他區域變暗（跟個人資料面板一樣的效果） ── */
+    body.sidebar-open::after {
+        content: "";
+        position: fixed;
+        inset: 0;
+        background: rgba(20, 30, 50, 0.25);
+        z-index: 399;   /* 低於側欄的 z-index:400，蓋在其他內容之上 */
+    }
+
+    /* ── 遮擋後的圖片排列改成直向（分段練習、整篇練習共用同一個元素，一起生效） ── */
+    .mask-image-area.visible {
+        flex-direction: column !important;
+        align-items: center !important;
+        justify-content: flex-start !important;
+        gap: 12px !important;
+        padding: 8px !important;   /* 💡 原本 16px 20px，縮小內距讓圖片有更多寬度可用 */
+        overflow-y: auto;   /* 三張直向排列可能超出可視高度，允許滾動查看 */
+        scroll-behavior: smooth;      /* 💡 跟字幕區 .lyrics-view 一樣的滑動手感 */
+        scrollbar-width: none;        /* 隱藏捲軸，但還是可以滑動 */
+    }
+    .mask-image-area.visible::-webkit-scrollbar { display: none; }
+ 
+    .mask-img-slot {
+        width: 100% !important;
+        max-width: none !important;   /* 💡 拿掉寫死的像素上限（370px），改由外層容器的百分比決定大小，跟裝置寬度連動 */
+        height: auto !important;   /* 改用 aspect-ratio 撐出正方形，而不是塞滿父層高度 */
+        flex: 0 0 auto !important; /* 不要平分高度，改成依內容各自堆疊 */
+    }
+ 
+    /* 💡 真正卡住圖片寬度的關鍵：record-main 原本最大只到螢幕的 94%，手機版放寬到 99% */
+    .record-main {
+        max-width: 99%;
+    }
 }

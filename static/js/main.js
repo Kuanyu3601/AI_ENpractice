@@ -82,6 +82,8 @@ window.switchWerFilter = function(btn, errorType, stripId) {
 console.log('[main.js v3] ✓ 已載入');
 
 function toggleSidebar() {
+
+
     const sidebar     = document.getElementById('sidebar');
     const showBtn     = document.getElementById('sidebarShowBtn');
     if (!sidebar) return;
@@ -96,6 +98,8 @@ function toggleSidebar() {
     try {
         localStorage.setItem('sidebarCollapsed', collapsed ? '1' : '0');
     } catch (e) { /* 忽略無痕模式等例外狀況 */ }
+
+    document.body.classList.toggle('sidebar-open', !collapsed);
 }
  
 // 💡 頁面載入時還原使用者上次的收合狀態
@@ -110,6 +114,37 @@ document.addEventListener('DOMContentLoaded', () => {
         const showBtn = document.getElementById('sidebarShowBtn');
         if (sidebar) sidebar.classList.add('is-collapsed');
         if (showBtn) showBtn.classList.add('is-visible');
+    }
+
+    document.body.classList.toggle('sidebar-open', !wasCollapsed);
+});
+
+function collapseSidebar() {
+    const sidebar = document.getElementById('sidebar');
+    const showBtn = document.getElementById('sidebarShowBtn');
+    if (!sidebar || sidebar.classList.contains('is-collapsed')) return;
+
+    sidebar.classList.add('is-collapsed');
+    if (showBtn) showBtn.classList.add('is-visible');
+
+    try {
+        localStorage.setItem('sidebarCollapsed', '1');
+    } catch (e) { /* 忽略無痕模式等例外狀況 */ }
+
+    document.body.classList.remove('sidebar-open');
+}
+
+document.addEventListener('click', (e) => {
+    if (window.innerWidth > 768) return;   // 只在手機版生效
+
+    const sidebar = document.getElementById('sidebar');
+    if (!sidebar || sidebar.classList.contains('is-collapsed')) return;
+
+    const clickedInsideSidebar = sidebar.contains(e.target);
+    const clickedToggleBtn = e.target.closest('#sidebarShowBtn, #sidebarHideBtn');
+
+    if (!clickedInsideSidebar && !clickedToggleBtn) {
+        collapseSidebar();
     }
 });
 
