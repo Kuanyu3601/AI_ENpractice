@@ -975,7 +975,7 @@ def upload_audio():
             wer_data_payload = {'original_text': original_text}
 
             wer_url = "http://backend-wer:8000/api/analyze-reading"
-            wer_response = requests.post(wer_url, files=wer_files, data=wer_data_payload, timeout=90)
+            wer_response = requests.post(wer_url, files=wer_files, data=wer_data_payload, timeout=120)
 
             if wer_response.status_code == 200:
                 full_wer_raw_json = wer_response.json()
@@ -1458,6 +1458,52 @@ def get_project_total_report():
                     "wer_fluency_feedback_text": None,
                     "fluency_score_100": None
                 })
+
+        # 🔧 核心修正：上面的迴圈只跑 range(1, total_paragraphs_count+1)，
+        #    也就是「只處理 paragraph_index 1 以上」的資料——這對分段模式沒問題，
+        #    但「整篇模式(whole)」的實際錄音資料，是存在 paragraph_index = 0！
+        #    導致這個迴圈永遠不會把整篇模式的資料放進 paragraph_list，
+        #    每次重新整理頁面、重新呼叫這支 API 時，整篇模式看起來就像「資料庫裡沒有資料」。
+        #    這裡額外把 paragraph_index=0 的資料（如果存在）補進 paragraph_list 最前面。
+        if 0 in recorded_dict:
+            row = recorded_dict[0]
+            whole_align_report = []
+            if row['alignment_report']:
+                try:
+                    if isinstance(row['alignment_report'], str):
+                        whole_align_report = json.loads(row['alignment_report'])
+                    else:
+                        whole_align_report = row['alignment_report']
+                except Exception as json_err:
+                    print(f"JSON 解析出錯 (paragraph_index=0): {json_err}")
+
+            paragraph_list.insert(0, {
+                "paragraph_index": 0,
+                "file_path": row['file_path'],
+                "wer": row['wer'],
+                "total_words": row['total_words'],
+                "error_count": row['error_count'],
+                "alignment_report": whole_align_report,
+                "npvi": row['npvi'] if row['npvi'] is not None else 0.0,
+                "varco": row['varco'] if row['varco'] is not None else 0.0,
+                "score_completeness": row['score_completeness'] if row['score_completeness'] is not None else 0.0,
+                "score_accuracy": row['score_accuracy'] if row['score_accuracy'] is not None else 0.0,
+                "score_fluency": row['score_fluency'] if row['score_fluency'] is not None else 0.0,
+                "score_grammar": row['score_grammar'] if row['score_grammar'] is not None else 0.0,
+                "fluency_score_100": row['fluency_score_100'] if row['fluency_score_100'] is not None else 0.0,
+                "fluency_feedback_text": row['fluency_feedback_text'] or "",
+                "completeness_feedback_text": row['completeness_feedback_text'] or "",
+                "accuracy_feedback_text": row['accuracy_feedback_text'] or "",
+                "wer_fluency_feedback_text": row['wer_fluency_feedback_text'] or ""
+            })
+
+            if row['wer'] is not None:
+                total_wer += float(row['wer'])
+                total_words += int(row['total_words'] or 0)
+                total_errors += int(row['error_count'] or 0)
+                total_npvi += float(row['npvi'] or 0.0)
+                total_varco += float(row['varco'] or 0.0)
+                recorded_count += 1
 
         avg_npvi = total_npvi / recorded_count if recorded_count > 0 else 0.0
         avg_varco = total_varco / recorded_count if recorded_count > 0 else 0.0

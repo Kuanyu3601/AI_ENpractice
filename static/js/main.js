@@ -697,6 +697,7 @@ function goToStep(step) {
 
     if (step === 0) _onEnterStep1();   // 回到選文章：顯示已選文章
     if (step === 1) _onEnterStep2();   // 回到錄音：還原錄音狀態
+    if (step === 2) _onEnterStep3();   // 💡 新增：進入分析報告，重新向後端抓資料渲染
 }
 
 
@@ -713,6 +714,17 @@ function navigateStep(dir) {
 
     if (next === 0) _onEnterStep1();
     if (next === 1) _onEnterStep2();
+    if (next === 2) _onEnterStep3();   // 💡 新增：進入分析報告，重新向後端抓資料渲染
+}
+
+// ── 進入 Step 3：重新向後端抓這個專案的分析報告並渲染 ──────
+// 💡 這是這次修的核心：之前 goToStep/navigateStep 完全沒有處理「進入 Step 3」要做的事，
+//    導致重新整理頁面後，點步驟圓點切到分析頁，畫面只是切換過去，
+//    從來沒有真的去後端 /get_project_total_report 抓資料、重新渲染報告，
+//    看起來就像是「沒有讀取資料庫顯示對應資料」。
+function _onEnterStep3() {
+    if (!state.activeProjectId) return;
+    _loadAndRenderProjectReport(state.activeProjectId);
 }
 
 // ── 進入 Step 1：顯示已選文章預覽 ──────────────────
@@ -1461,8 +1473,7 @@ async function uploadAudio() {
                     state.currentStep = 2;
                     updateStepUI();
                     renderWholeReportDirectly(
-                        result.wer_result.statistics,
-                        result.wer_result.alignment_report,
+                        result.wer_result,
                         result.url
                     );
                 } else if (typeof settleAndShowReport === 'function') {
@@ -2722,21 +2733,17 @@ function renderWerReportToPanel3(alignmentReport, stats, currentParaNum = 1, bac
  *    因為那支 API 目前無法正確辨識整篇錄音這一筆資料，算出來的平均值永遠是 0。
  *    下方段落列表也只會渲染這一筆「整篇朗讀」的手風琴卡，不會有其他段落殘影。
  */
-function renderWholeReportDirectly(stats, alignmentReport, backendAudioUrl) {
+function renderWholeReportDirectly(werResult, backendAudioUrl) {
     try {
-        stats = stats || {};
-        alignmentReport = alignmentReport || [];
-
-        const errorCount = alignmentReport.length > 0
-            ? alignmentReport.filter(i => (i.Category || i.category) !== 'Match').length
-            : ((stats.repair_repetition || 0) + (stats.repair_attempt || 0) + (stats.repair_restart || 0) +
-               (stats.substitutions || 0) + (stats.deletions || 0) + (stats.insertions || 0));
+        werResult = werResult || {};
+        const stats = werResult.statistics || {};
+        const alignmentReport = werResult.alignment_report || [];
 
         const werPct = werToAccuracyPercentText(stats.wer_repair_fluency || 0);
-        const totalWords = stats.total_ref_words ?? 0;
-        const npvi = (stats.npvi != null) ? parseFloat(stats.npvi).toFixed(2) : '0.00';
-        const varco = (stats.varco != null) ? parseFloat(stats.varco).toFixed(2) : '0.00';
-        const overallFluencyScore = stats.overall_fluency_score_100 != null ? Math.round(stats.overall_fluency_score_100) : '—';
+        const npvi = (werResult.npvi != null) ? parseFloat(werResult.npvi).toFixed(2) : '0.00';
+        const varco = (werResult.varco != null) ? parseFloat(werResult.varco).toFixed(2) : '0.00';
+        const overallFluencyScore = werResult.overall_fluency_score_100 != null ? Math.round(werResult.overall_fluency_score_100) : '—';
+        const errorCount = alignmentReport.filter(i => (i.Category || i.category) !== 'Match').length;
 
         // 1. 直接改寫總成績卡的兩個數字，不做任何平均運算
         if (document.getElementById('werScoreText')) document.getElementById('werScoreText').innerText = werPct;
@@ -2745,18 +2752,30 @@ function renderWholeReportDirectly(stats, alignmentReport, backendAudioUrl) {
         const bannerTitle = document.getElementById('scoreBannerTitle');
         if (bannerTitle) bannerTitle.innerHTML = '📊 整篇朗讀流暢度結算看板';
 
-        // 2. 下方只畫「整篇朗讀」這一張手風琴卡
+        // 💡 標題文字也換成「整篇」版本，跟分段模式的報告頁共用同一套文字比對邏輯
+        (function updateDetailReportSectionTitle() {
+            const allEls = document.querySelectorAll('h1, h2, h3, h4, h5, span, div, p, label');
+            for (const el of allEls) {
+                if (el.children.length > 0) continue;
+                const text = (el.textContent || '').trim();
+                if (text.includes('段落詳細回報') || text.includes('整篇詳細回報')) {
+                    el.textContent = text.replace('段落詳細回報', '整篇詳細回報');
+                    break;
+                }
+            }
+        })();
+
+        // 2. 下方直接顯示「整篇朗讀」這一份完整報告，跟分段模式共用同一套小工具，不用手風琴收合
         const container = document.getElementById('werParagraphsContainer');
         if (!container) return;
         container.innerHTML = '';
 
         const stripId = `strip-whole-${Date.now()}`;
-        // 💡 雷達圖改成四個維度（0~5分，來自 Ollama 評分），不再是錯誤類型次數
         const radarScores = [
-            stats.score_completeness || 0,
-            stats.score_accuracy || 0,
-            stats.score_fluency || 0,
-            stats.score_grammar || 0
+            werResult.score_completeness || 0,
+            werResult.score_accuracy || 0,
+            werResult.score_fluency || 0,
+            werResult.score_grammar || 0
         ];
 
         const strip = document.createElement('div');
@@ -2767,90 +2786,84 @@ function renderWholeReportDirectly(stats, alignmentReport, backendAudioUrl) {
             strip.setAttribute('data-alignment', JSON.stringify(alignmentReport).replace(/'/g, "&apos;"));
         }
 
+        // 💡 標題列（純顯示，不能點擊收合，因為整篇模式本來就只有一份資料要直接展開）
         const header = document.createElement('div');
-        header.style.cssText = 'padding: 18px 24px; background: #f8fafc; display: flex; align-items: center; justify-content: space-between; cursor: pointer;';
+        header.style.cssText = 'padding: 18px 24px; background: #f8fafc; display: flex; align-items: center; justify-content: space-between; cursor: default;';
         header.innerHTML = `
             <div style="display: flex; align-items: center; gap: 30px; flex: 1; flex-wrap: wrap;">
                 <span style="font-weight: bold; color: #1f2937; min-width: 65px; font-size: 1.05rem;">整篇朗讀</span>
                 <span style="color: #16a34a; font-weight: bold; background: #dcfce7; padding: 4px 12px; border-radius: 8px; font-size: 0.85rem;">✓ 已錄音</span>
                 <div style="display: flex; gap: 24px; color: #4a5568; font-size: 0.92rem; align-items: center; flex-wrap: wrap;">
-                    <div>WER: <strong style="color: #e63946; font-size: 1.05rem;">${werPct}</strong></div>
+                    <div>詞正確率: <strong style="color: #16a34a; font-size: 1.05rem;">${werPct}</strong></div>
                     <div>錯誤數: <strong style="color: #fb923c; font-size: 1.05rem;">${errorCount}</strong></div>
                     <div style="color: #4a5568; border-left: 1px solid #e2e8f0; padding-left: 16px;">nPVI: <strong style="color: #2563eb; font-size: 1.05rem;">${npvi}</strong></div>
                     <div style="color: #4a5568;">Varco: <strong style="color: #10b981; font-size: 1.05rem;">${varco}</strong></div>
                 </div>
             </div>
-            <div style="display: flex; align-items: center; gap: 8px;">
-                <span style="color: #a0aec0; font-size: 0.85rem;">展開對照</span> <span class="arrow-icon" style="transition: transform 0.2s; color: #cbd5e1;">▼</span>
-            </div>
         `;
 
         const body = document.createElement('div');
-        body.style.cssText = 'padding: 24px; display: none; background: #ffffff; border-top: 1px solid #edf2f7; flex-direction: column; gap: 24px;';
+        // 💡 整篇模式：不用手風琴收合，直接展開顯示
+        body.style.cssText = 'padding: 24px; display: flex; background: #ffffff; border-top: 1px solid #edf2f7; flex-direction: column; gap: 24px;';
 
-        let cleanAudioUrl = backendAudioUrl || '';
-        if (cleanAudioUrl && !cleanAudioUrl.startsWith('/') && !cleanAudioUrl.startsWith('http')) cleanAudioUrl = '/' + cleanAudioUrl;
-        if (cleanAudioUrl) cleanAudioUrl += (cleanAudioUrl.includes('?') ? '&' : '?') + 't=' + Date.now();
+        const actualNpviNum = parseFloat(npvi) || 0;
+        const actualVarcoNum = parseFloat(varco) || 0;
+        const fluencyFeedbackText = werResult.fluency_feedback_text || '';
+        const completenessFeedbackText = werResult.completeness_feedback_text || '';
+        const accuracyFeedbackText = werResult.accuracy_feedback_text || '';
+        const werFluencyFeedbackText = werResult.wer_fluency_feedback_text || '';
 
-        body.innerHTML = `
+        const chartsHTML = `
             <div style="display: flex; gap: 24px; width: 100%; flex-wrap: wrap;">
                 <div style="flex: 1; min-width: 300px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; align-items: center;">
-                    <div style="font-size: 0.95rem; font-weight: bold; color: #475569; margin-bottom: 12px; align-self: flex-start;">🕸️ 發音錯誤面向分析</div>
-                    <div style="position: relative; width: 100%; height: 220px;"><canvas class="radar-canvas"></canvas></div>
+                    <div style="font-size: 0.95rem; font-weight: bold; color: #475569; margin-bottom: 12px; align-self: flex-start;">🕸️ 朗讀整體面向分析</div>
+                    <div style="position: relative; width: 100%; height: 220px;">
+                        <canvas class="radar-canvas"></canvas>
+                    </div>
                 </div>
                 <div style="flex: 1; min-width: 300px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; justify-content: center; gap: 20px;">
-                    <div style="font-size: 0.95rem; font-weight: bold; color: #475569; margin-bottom: 4px;">🎯 流暢度達標分析 (Bullet Chart)</div>
-                    ${renderFluencyBulletBar('nPVI 節奏指數', parseFloat(npvi) || 0, NPVI_SYL_MEAN, NPVI_SYL_STD, '#3b82f6')}
-                    ${renderFluencyBulletBar('Varco 語速變異', parseFloat(varco) || 0, VARCO_SYL_MEAN, VARCO_SYL_STD, '#10b981')}
-                </div>
-            </div>
-            <div style="background: #f1f5f9; border: 1px solid #cbd5e1; padding: 12px 18px; border-radius: 8px;">
-                <div style="font-size: 0.9rem; font-weight: bold; color: #475569; margin-bottom: 8px;">🎵 錄音回放 (WAV)：</div>
-                <audio src="${cleanAudioUrl}" controls style="width: 100%; height: 36px;" preload="metadata"></audio>
-            </div>
-            <div style="display: flex; flex-direction: column; gap: 12px;">
-                <div style="font-size: 0.9rem; font-weight: bold; color: #475569;">🔍 點擊錯誤類別，查看發生在哪個單字：</div>
-                <div style="display: flex; flex-wrap: wrap; gap: 8px;">
-                    <button class="wer-filter-btn" onclick="window.switchWerFilter(this, 'repair_repetition', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Repetition</button>
-                    <button class="wer-filter-btn" onclick="window.switchWerFilter(this, 'repair_attempt', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Attempt</button>
-                    <button class="wer-filter-btn" onclick="window.switchWerFilter(this, 'repair_restart', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Restart</button>
-                    <button class="wer-filter-btn" onclick="window.switchWerFilter(this, 'substitutions', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Substitutions</button>
-                    <button class="wer-filter-btn" onclick="window.switchWerFilter(this, 'deletions', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Deletions</button>
-                    <button class="wer-filter-btn" onclick="window.switchWerFilter(this, 'insertions', '${stripId}')" style="padding: 6px 14px; border:none; background: #f1f5f9; color: #475569; border-radius: 20px; font-weight: bold; cursor: pointer; transition: 0.2s;">Insertions</button>
-                </div>
-                <div class="transcript-display-area" style="margin-top: 8px;">
-                    <div style="text-align: center; color: #94a3b8; font-size: 0.95rem; padding: 20px; background: #f8fafc; border-radius: 8px; border: 1px dashed #cbd5e1;">
-                        請點擊上方的分類按鈕，以顯示逐字稿與標記紅字。
-                    </div>
+                    <div style="font-size: 0.95rem; font-weight: bold; color: #475569; margin-bottom: 4px;">🎯 口語流暢分析</div>
+                    ${renderFluencyBulletBar('nPVI 相鄰語速變異', actualNpviNum, NPVI_SYL_MEAN, NPVI_SYL_STD, '#3b82f6')}
+                    ${renderFluencyBulletBar('Varco 整體語速變異', actualVarcoNum, VARCO_SYL_MEAN, VARCO_SYL_STD, '#10b981')}
                 </div>
             </div>
         `;
 
-        header.addEventListener('click', () => {
-            const isHidden = body.style.display === 'none';
-            body.style.display = isHidden ? 'flex' : 'none';
-            header.querySelector('.arrow-icon').style.transform = isHidden ? 'rotate(180deg)' : 'rotate(0deg)';
-            header.style.background = isHidden ? '#f1f5f9' : '#f8fafc';
+        // 💡 跟分段模式共用同一套「分色分段音檔對照小工具」，整篇模式沒有段落分界資料可傳（單一整篇本身就是一份）
+        const chunkListForWidget = werResult.chunk_details || [];
+        const wordTimingsForWidget = werResult.word_timings || [];
+        const sentenceFluencyForWidget = werResult.sentence_fluency || [];
+        const chunkedAudioHTML = buildChunkedAudioBlock(
+            stripId, chunkListForWidget, alignmentReport, backendAudioUrl || '',
+            wordTimingsForWidget, sentenceFluencyForWidget,
+            fluencyFeedbackText, completenessFeedbackText, accuracyFeedbackText, werFluencyFeedbackText,
+            werResult.recording_fluency_score_100, werResult.score_completeness, werResult.score_accuracy, werResult.score_fluency,
+            null
+        );
 
-            if (isHidden && !body.dataset.chartRendered) {
-                body.dataset.chartRendered = 'true';
-                const canvas = body.querySelector('.radar-canvas');
-                if (canvas) {
-                    new Chart(canvas.getContext('2d'), {
-                        type: 'radar',
-                        data: {
-                            labels: ['完整度', '準確度', '流利度', '語法'],
-                            datasets: [{ label: '評分 (0-5)', data: radarScores, backgroundColor: 'rgba(230, 57, 70, 0.2)', borderColor: '#e63946', pointBackgroundColor: '#e63946', borderWidth: 2 }]
-                        },
-                        options: { responsive: true, maintainAspectRatio: false, scales: { r: { beginAtZero: true, min: 0, max: 5, ticks: { stepSize: 1, backdropColor: 'transparent' }, pointLabels: { font: { size: 12, weight: 'bold' }, color: '#475569' } } }, plugins: { legend: { display: false } } }
-                    });
+        body.innerHTML = chartsHTML + chunkedAudioHTML;
+
+        const canvas = body.querySelector('.radar-canvas');
+        if (canvas) {
+            new Chart(canvas.getContext('2d'), {
+                type: 'radar',
+                data: {
+                    labels: ['發音完整度', '發音準確度', '口說流利度', '語法'],
+                    datasets: [{ label: '評分 (0-5)', data: radarScores, backgroundColor: 'rgba(230, 57, 70, 0.2)', borderColor: '#e63946', pointBackgroundColor: '#e63946', borderWidth: 2 }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    scales: { r: { beginAtZero: true, min: 0, max: 5, ticks: { stepSize: 1, backdropColor: 'transparent' }, pointLabels: { font: { size: 12, weight: 'bold' }, color: '#475569' } } },
+                    plugins: { legend: { display: false } }
                 }
-            }
-        });
+            });
+        }
 
         strip.appendChild(header);
         strip.appendChild(body);
         container.appendChild(strip);
+
+        initChunkedAudioBlock(stripId);
 
         console.log('🎯 [WER 報表] 整篇模式直接渲染完成，未經任何平均計算！');
     } catch (err) {
@@ -3073,7 +3086,10 @@ function renderChunkTranscriptRow(layout, targetCategory, chunkFluencyMap) {
         'repair_restart': ['repair_restart', 'repair_replacement'],
         'substitutions': ['substitute'],
         'deletions': ['delete'],
-        'insertions': ['insert']
+        'insertions': ['insert'],
+        // 💡 新增組合類別：標籤按鈕隱藏底層細項後，改由「發音完整度」「口說流利度」一次觸發多種類別的標色
+        'completeness_combined': ['delete', 'insert', 'substitute'],
+        'fluency_wer_combined': ['repair_repetition', 'repair_attempt', 'repair_restart', 'repair_replacement']
     };
     const isFluencyMode = targetCategory === 'fluency';
     const normalizedTargets = (targetCategory && !isFluencyMode) ? (targetCategoryMap[targetCategory] || [targetCategory.toLowerCase()]) : null;
@@ -3137,7 +3153,7 @@ function renderChunkTranscriptRow(layout, targetCategory, chunkFluencyMap) {
 
             return `
                 <div class="${wordDivClass}"${wordDivExtraAttrs} style="display:flex; flex-direction:column; align-items:center; margin: 4px 6px; min-width: 34px; flex: 0 0 auto; white-space:nowrap; ${isTargetError && !isFluencyMode ? 'cursor:pointer; position:relative;' : ''}">
-                    <span style="font-size:0.95rem; color:${refColor}; font-weight:600;">${ref === '—' ? '-' : ref}</span>
+                    <span class="ref-word-span" style="font-size:0.95rem; color:${refColor}; font-weight:600; cursor:pointer;">${ref === '—' ? '-' : ref}</span>
                     <span style="font-size:0.9rem; ${hypStyle}">${displayHyp}</span>${megaphoneHtml}
                 </div>
             `;
@@ -3218,7 +3234,9 @@ function findFirstErrorLayoutIndex(layout, errorType) {
         'repair_restart': ['repair_restart', 'repair_replacement'],
         'substitutions': ['substitute'],
         'deletions': ['delete'],
-        'insertions': ['insert']
+        'insertions': ['insert'],
+        'completeness_combined': ['delete', 'insert', 'substitute'],
+        'fluency_wer_combined': ['repair_repetition', 'repair_attempt', 'repair_restart', 'repair_replacement']
     };
     const targets = targetCategoryMap[errorType] || [errorType.toLowerCase()];
 
@@ -3237,6 +3255,54 @@ function findFirstErrorLayoutIndex(layout, errorType) {
  * 💡 流暢度模式專用：在目前排版陣列裡，找出「第一個」被標記為紅色或黃色的句子(chunk)位置。
  *    優先找紅色（比較嚴重），找不到紅色才找黃色。找不到都回傳 -1。
  */
+/**
+ * 💡 跟 findFirstErrorLayoutIndex 邏輯一樣，但回傳「全部」命中的位置陣列，
+ *    給上一個/下一個箭頭導航用，不是只找第一個就停。
+ */
+function findAllErrorLayoutIndices(layout, errorType) {
+    const targetCategoryMap = {
+        'repair_repetition': ['repair_repetition'],
+        'repair_attempt': ['repair_attempt'],
+        'repair_restart': ['repair_restart', 'repair_replacement'],
+        'substitutions': ['substitute'],
+        'deletions': ['delete'],
+        'insertions': ['insert'],
+        'completeness_combined': ['delete', 'insert', 'substitute'],
+        'fluency_wer_combined': ['repair_repetition', 'repair_attempt', 'repair_restart', 'repair_replacement']
+    };
+    const targets = targetCategoryMap[errorType] || [errorType.toLowerCase()];
+    const indices = [];
+
+    for (let i = 0; i < layout.length; i++) {
+        const items = layout[i].items || [];
+        const hasMatch = items.some(item => {
+            const cat = (item.Category || item.category || '').toString().toLowerCase();
+            return targets.includes(cat);
+        });
+        if (hasMatch) indices.push(i);
+    }
+    return indices;
+}
+
+/**
+ * 💡 流暢度模式專用：找出「全部」被標記為黃/紅的句子位置（每句只算一次，用該句第一個字代表）。
+ */
+function findAllFlaggedSentenceIndices(layout, chunkFluencyMap) {
+    if (!chunkFluencyMap) return [];
+    const seenChunks = new Set();
+    const indices = [];
+    for (let i = 0; i < layout.length; i++) {
+        const chunkIdx = layout[i].chunkIndex;
+        if (seenChunks.has(chunkIdx)) continue;
+        const status = (chunkFluencyMap[chunkIdx] || {}).status;
+        if (status === 'red' || status === 'yellow') {
+            indices.push(i);
+            seenChunks.add(chunkIdx);
+        }
+    }
+    return indices;
+}
+
 function findFirstFlaggedSentenceIndex(layout, chunkFluencyMap) {
     if (!chunkFluencyMap) return -1;
     let firstYellow = -1;
@@ -3380,6 +3446,54 @@ window.speakEnglishWord = function(word) {
     if (voice) utt.voice = voice;
     utt.rate = 0.85;
     setTimeout(() => speechSynthesis.speak(utt), 60);
+};
+
+// ══════════════════════════════════════════════════
+//  📖 點擊黑色正確文字：從該字開始往下念到底，再點一次暫停/繼續
+// ══════════════════════════════════════════════════
+// 💡 記錄「目前是哪個小工具、從第幾個字開始」在朗讀，
+//    因為 Web Speech API 全域只有一個播放佇列，用這個物件判斷
+//    使用者是點了「同一個起點」（該暫停/繼續）還是「新的起點」（該重新開始念）。
+let currentReadSession = null; // { stripId, startIndex }
+
+/**
+ * 💡 把 layout 陣列裡，從 startIndex 開始到最後一個字為止的所有「正確課文(Reference)」接起來。
+ */
+function buildReferenceTextFromIndex(layout, startIndex) {
+    const words = [];
+    for (let i = startIndex; i < layout.length; i++) {
+        (layout[i].items || []).forEach(item => {
+            const ref = (item.Reference || item.reference || '').trim();
+            if (ref && ref !== '—' && ref !== '–') words.push(ref);
+        });
+    }
+    return words.join(' ');
+}
+
+window.toggleReadFromWord = function(stripId, layout, wordIndex) {
+    const isSameSession = currentReadSession
+        && currentReadSession.stripId === stripId
+        && currentReadSession.startIndex === wordIndex;
+
+    // 💡 點的是「同一個起點」而且現在還在講：切換暫停/繼續，不要重新開始念
+    if (isSameSession && speechSynthesis.speaking) {
+        if (speechSynthesis.paused) {
+            speechSynthesis.resume();
+        } else {
+            speechSynthesis.pause();
+        }
+        return;
+    }
+
+    // 💡 點的是新的起點（或目前沒在念）：從這個字開始重新往下念到底
+    speechSynthesis.cancel();
+    const textToRead = buildReferenceTextFromIndex(layout, wordIndex);
+    if (!textToRead) return;
+
+    currentReadSession = { stripId, startIndex: wordIndex };
+    setTimeout(() => {
+        if (typeof speakSentence === 'function') speakSentence(textToRead);
+    }, 60);
 };
 
 // ══════════════════════════════════════════════════
@@ -3544,28 +3658,35 @@ window.openCategoryFeedbackForStrip = function(stripId, category) {
 
     const map = {
         fluency: {
-            title: '🎯 口語流暢評語',
+            title: '🎯 口語流暢度評語',
             text: widget.dataset.fluencyFeedback || '',
-            score: widget.dataset.fluencyScore100 ? `${Math.round(parseFloat(widget.dataset.fluencyScore100))}/100` : ''
+            score: widget.dataset.fluencyScore100 ? `${Math.round(parseFloat(widget.dataset.fluencyScore100))}/100` : '',
+            filterCategory: 'fluency'   // 💡 口語流暢度：沿用句子層級的黃/紅標色 + 跳轉
         },
         completeness: {
-            title: '📋 完整度評語',
+            title: '📋 發音完整度評語',
             text: widget.dataset.completenessFeedback || '',
-            score: widget.dataset.scoreCompleteness ? `${parseFloat(widget.dataset.scoreCompleteness).toFixed(1)}/5` : ''
+            score: widget.dataset.scoreCompleteness ? `${parseFloat(widget.dataset.scoreCompleteness).toFixed(1)}/5` : '',
+            filterCategory: 'completeness_combined'   // 💡 一次標色：刪除+插入+替換
         },
         accuracy: {
-            title: '📋 準確度評語',
+            title: '📋 發音準確度評語',
             text: widget.dataset.accuracyFeedback || '',
-            score: widget.dataset.scoreAccuracy ? `${parseFloat(widget.dataset.scoreAccuracy).toFixed(1)}/5` : ''
+            score: widget.dataset.scoreAccuracy ? `${parseFloat(widget.dataset.scoreAccuracy).toFixed(1)}/5` : '',
+            filterCategory: null   // 💡 準確度故意不做任何標色，只顯示評語+TTS
         },
         fluency_wer: {
-            title: '📋 流利度評語',
+            title: '📋 口說流利度評語',
             text: widget.dataset.werFluencyFeedback || '',
-            score: widget.dataset.scoreFluencyWer ? `${parseFloat(widget.dataset.scoreFluencyWer).toFixed(1)}/5` : ''
+            score: widget.dataset.scoreFluencyWer ? `${parseFloat(widget.dataset.scoreFluencyWer).toFixed(1)}/5` : '',
+            filterCategory: 'fluency_wer_combined'   // 💡 一次標色：重複+嘗試修正+重新開始
         }
     };
     const item = map[category];
     if (!item) return;
+
+    // 💡 先觸發標色/跳轉（準確度傳 null，代表清掉標色只顯示原本樣式），再打開評語浮框
+    window.switchWerFilterChunked(null, item.filterCategory, stripId);
     window.showCategoryFeedback(item.title, item.text, item.score);
 };
 
@@ -3573,7 +3694,7 @@ window.openCategoryFeedbackForStrip = function(stripId, category) {
  * 💡 建立完整的「WaveSurfer 波形(疊加一深一淺色塊做分段) + 逐字稿對照 + 篩選按鈕」小工具 HTML。
  *    chunks 直接用 extendedReport.chunk_details（NPVI 回傳的 chunk_results，含 xmin/xmax/label）。
  */
-function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl, wordTimings, sentenceFluency, fluencyFeedbackText, completenessFeedbackText, accuracyFeedbackText, werFluencyFeedbackText, fluencyScore100, scoreCompleteness, scoreAccuracy, scoreFluencyWer) {
+function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl, wordTimings, sentenceFluency, fluencyFeedbackText, completenessFeedbackText, accuracyFeedbackText, werFluencyFeedbackText, fluencyScore100, scoreCompleteness, scoreAccuracy, scoreFluencyWer, originalParagraphs) {
     const WORD_SLOT_WIDTH = 50;  // 每個字（含上下兩行）大約需要的寬度
     const MIN_PX_PER_SEC = 60;   // 每秒最少像素，避免音檔很長、字很少時比例被拉得太小
 
@@ -3617,6 +3738,35 @@ function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl, w
     const layout = computeLayout(grouped, basePxPerSec);
     const transcriptHtml = renderChunkTranscriptRow(layout, null);
 
+    // 💡 整篇模式專用：估算每個「原始段落」在這份逐字對齊結果裡，是從哪個字開始的，
+    //    供下方的「跳到下一段開頭」箭頭使用。做法：依序累計每個字的正確課文(Reference)字數，
+    //    累計到達某段落的字數時，就代表換下一段了，記錄那個位置。
+    //    這只是用字數比對的估算，不是 100% 精準對齊到逐字，但已經足夠讓使用者快速跳到大概的段落起點。
+    let paragraphStartIndices = [];
+    if (Array.isArray(originalParagraphs) && originalParagraphs.length > 1) {
+        let paraPtr = 0;
+        let wordsIntoCurrentPara = 0;
+        let targetWordCount = (originalParagraphs[0] || '').trim().split(/\s+/).filter(Boolean).length;
+        paragraphStartIndices.push(0);
+
+        for (let i = 0; i < layout.length && paraPtr < originalParagraphs.length - 1; i++) {
+            const realWordCount = (layout[i].items || []).filter(item => {
+                const ref = (item.Reference || item.reference || '').trim();
+                return ref && ref !== '—' && ref !== '–';
+            }).length;
+            wordsIntoCurrentPara += realWordCount;
+
+            if (wordsIntoCurrentPara >= targetWordCount) {
+                paraPtr++;
+                if (paraPtr < originalParagraphs.length) {
+                    paragraphStartIndices.push(Math.min(i + 1, layout.length - 1));
+                    targetWordCount = (originalParagraphs[paraPtr] || '').trim().split(/\s+/).filter(Boolean).length;
+                    wordsIntoCurrentPara = 0;
+                }
+            }
+        }
+    }
+
     const layoutJson = JSON.stringify(layout).replace(/'/g, "&apos;");
     // 💡 存一份「還沒換算成像素位置」的原始分組資料，縮放滑桿拉動時要用這份資料重新計算，
     //    不能直接拿 layout（那是已經用 basePxPerSec 算好位置的結果）去等比縮放，
@@ -3640,6 +3790,16 @@ function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl, w
 
     const errorCounts = countErrorsByCategory(alignmentReport);
 
+    // 💡 新增：算出每個標籤要顯示的「(錯誤數/總數)」，讓使用者知道大概有幾個問題
+    const totalRefWords = (alignmentReport || []).filter(item => {
+        const cat = (item.Category || item.category || '').toString().toLowerCase();
+        return cat !== 'insert'; // insert 是多念出來的字，本來就不對應任何一個課文原字，不算進總字數
+    }).length;
+    const completenessErrCount = errorCounts.deletions + errorCounts.insertions + errorCounts.substitutions;
+    const accuracyErrCount = errorCounts.substitutions;
+    const fluencyWerErrCount = errorCounts.repair_repetition + errorCounts.repair_attempt + errorCounts.repair_restart;
+    const totalSentenceCount = (sentenceFluency || []).length;
+
     return `
         <div class="chunk-audio-widget" id="${stripId}-chunkwidget"
              data-layout='${layoutJson}' data-raw-groups='${rawGroupsJson}' data-chunks='${chunkTimesJson}'
@@ -3652,34 +3812,46 @@ function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl, w
              data-fluency-score100="${fluencyScore100 != null ? fluencyScore100 : ''}"
              data-score-completeness="${scoreCompleteness != null ? scoreCompleteness : ''}"
              data-score-accuracy="${scoreAccuracy != null ? scoreAccuracy : ''}"
-             data-score-fluency-wer="${scoreFluencyWer != null ? scoreFluencyWer : ''}">
+             data-score-fluency-wer="${scoreFluencyWer != null ? scoreFluencyWer : ''}"
+             data-paragraph-starts='${JSON.stringify(paragraphStartIndices)}'>
             <div style="font-size: 0.9rem; font-weight: bold; color: #475569; margin-bottom: 8px;">
                 🎵 錄音回放
             </div>
 
             <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom: 10px;">
                 <button id="${stripId}-playbtn" type="button" style="padding:6px 16px; border:none; background:#e63946; color:#fff; border-radius:20px; font-weight:bold; cursor:pointer; font-size:0.85rem; white-space:nowrap;">▶ 播放</button>
+
+                <!-- 💡 整篇模式專用：跳到上一段/下一段開頭，方便在整篇錄音裡快速定位到原本文章的段落分界。
+                     沒有段落分界資料時（分段模式）JS 會自動隱藏這個按鈕組。 -->
+                <div id="${stripId}-paragraph-nav" style="display:none; align-items:center; gap:6px; padding:4px 10px; background:#f1f5f9; border-radius:20px;">
+                    <span onclick="window.navToParagraph('${stripId}', -1)" title="上一段開頭" style="cursor:pointer; font-size:1rem; color:#475569; font-weight:bold; user-select:none;">⏮</span>
+                    <span id="${stripId}-paragraph-counter" style="font-size:0.78rem; color:#475569; font-weight:bold; white-space:nowrap;"></span>
+                    <span onclick="window.navToParagraph('${stripId}', 1)" title="下一段開頭" style="cursor:pointer; font-size:1rem; color:#475569; font-weight:bold; user-select:none;">⏭</span>
+                </div>
+
                 <div style="width:1px; height:22px; background:#e2e8f0; margin: 0 4px;"></div>
 
-                <!-- 💡 完整度：刪除 + 插入，綠色底框 -->
-                <div style="border:2px solid #16a34a; border-radius:10px; padding:4px 8px 6px; background:#f0fdf4; display:flex; flex-direction:column; gap:4px;">
-                    <span class="category-label-clickable" onclick="window.openCategoryFeedbackForStrip('${stripId}','completeness')" style="font-size:0.85rem; font-weight:bold; color:#16a34a; text-align:center; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:2px;">完整度<span style="font-size:0.7rem;">👆</span></span>
-                    <div style="display:flex; gap:6px;">
+                <!-- 💡 發音完整度：底層的刪除/插入/替換按鈕隱藏起來（不對外呈現計分細節），
+                     標籤點擊後會一次觸發「刪除+插入+替換」三種錯誤的標色與跳轉，同時顯示 LLM 評語+TTS。 -->
+                <div style="border:2px solid #16a34a; border-radius:10px; padding:6px 14px; background:#f0fdf4;">
+                    <span class="category-label-clickable" onclick="window.openCategoryFeedbackForStrip('${stripId}','completeness')" style="font-size:0.85rem; font-weight:bold; color:#16a34a; text-align:center; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:2px; flex-wrap:wrap;">發音完整度<span style="font-size:0.7rem; font-weight:normal;">(${completenessErrCount}/${totalRefWords})</span><span style="font-size:0.7rem;">👆</span></span>
+                    <div style="display:none;">
                         <button class="wer-filter-btn-chunked" data-original-bg="#fff" data-original-color="#16a34a" onclick="window.switchWerFilterChunked(this, 'deletions', '${stripId}')" style="padding: 5px 12px; border:none; background: #fff; color: #16a34a; border-radius: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size:0.85rem;">刪除 (${errorCounts.deletions})</button>
                         <button class="wer-filter-btn-chunked" data-original-bg="#fff" data-original-color="#16a34a" onclick="window.switchWerFilterChunked(this, 'insertions', '${stripId}')" style="padding: 5px 12px; border:none; background: #fff; color: #16a34a; border-radius: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size:0.85rem;">插入 (${errorCounts.insertions})</button>
+                        <button class="wer-filter-btn-chunked" data-original-bg="#fff" data-original-color="#16a34a" onclick="window.switchWerFilterChunked(this, 'substitutions', '${stripId}')" style="padding: 5px 12px; border:none; background: #fff; color: #16a34a; border-radius: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size:0.85rem;">替換 (${errorCounts.substitutions})</button>
                     </div>
                 </div>
 
-                <!-- 💡 準確度：替換，藍色底框 -->
-                <div style="border:2px solid #2563eb; border-radius:10px; padding:4px 8px 6px; background:#eff6ff; display:flex; flex-direction:column; gap:4px;">
-                    <span class="category-label-clickable" onclick="window.openCategoryFeedbackForStrip('${stripId}','accuracy')" style="font-size:0.85rem; font-weight:bold; color:#2563eb; text-align:center; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:2px;">準確度<span style="font-size:0.7rem;">👆</span></span>
-                    <button class="wer-filter-btn-chunked" data-original-bg="#fff" data-original-color="#2563eb" onclick="window.switchWerFilterChunked(this, 'substitutions', '${stripId}')" style="padding: 5px 12px; border:none; background: #fff; color: #2563eb; border-radius: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size:0.85rem;">替換 (${errorCounts.substitutions})</button>
+                <!-- 💡 發音準確度：不做任何文字標色/跳轉，純粹只顯示 LLM 評語 + TTS -->
+                <div style="border:2px solid #2563eb; border-radius:10px; padding:6px 14px; background:#eff6ff;">
+                    <span class="category-label-clickable" onclick="window.openCategoryFeedbackForStrip('${stripId}','accuracy')" style="font-size:0.85rem; font-weight:bold; color:#2563eb; text-align:center; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:2px; flex-wrap:wrap;">發音準確度<span style="font-size:0.7rem; font-weight:normal;">(${accuracyErrCount}/${totalRefWords})</span><span style="font-size:0.7rem;">👆</span></span>
                 </div>
 
-                <!-- 💡 流利度：重複 + 嘗試修正 + 重新開始，橘色底框 -->
-                <div style="border:2px solid #d97706; border-radius:10px; padding:4px 8px 6px; background:#fffbeb; display:flex; flex-direction:column; gap:4px;">
-                    <span class="category-label-clickable" onclick="window.openCategoryFeedbackForStrip('${stripId}','fluency_wer')" style="font-size:0.85rem; font-weight:bold; color:#d97706; text-align:center; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:2px;">流利度<span style="font-size:0.7rem;">👆</span></span>
-                    <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                <!-- 💡 口說流利度：底層的重複/嘗試修正/重新開始按鈕隱藏起來，
+                     標籤點擊後一次觸發三種行為的標色與跳轉，同時顯示 LLM 評語+TTS。 -->
+                <div style="border:2px solid #d97706; border-radius:10px; padding:6px 14px; background:#fffbeb;">
+                    <span class="category-label-clickable" onclick="window.openCategoryFeedbackForStrip('${stripId}','fluency_wer')" style="font-size:0.85rem; font-weight:bold; color:#d97706; text-align:center; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:2px; flex-wrap:wrap;">口說流利度<span style="font-size:0.7rem; font-weight:normal;">(${fluencyWerErrCount}/${totalRefWords})</span><span style="font-size:0.7rem;">👆</span></span>
+                    <div style="display:none;">
                         <button class="wer-filter-btn-chunked" data-original-bg="#fff" data-original-color="#d97706" onclick="window.switchWerFilterChunked(this, 'repair_repetition', '${stripId}')" style="padding: 5px 12px; border:none; background: #fff; color: #d97706; border-radius: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size:0.85rem;">重複 (${errorCounts.repair_repetition})</button>
                         <button class="wer-filter-btn-chunked" data-original-bg="#fff" data-original-color="#d97706" onclick="window.switchWerFilterChunked(this, 'repair_attempt', '${stripId}')" style="padding: 5px 12px; border:none; background: #fff; color: #d97706; border-radius: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size:0.85rem;">嘗試修正 (${errorCounts.repair_attempt})</button>
                         <button class="wer-filter-btn-chunked" data-original-bg="#fff" data-original-color="#d97706" onclick="window.switchWerFilterChunked(this, 'repair_restart', '${stripId}')" style="padding: 5px 12px; border:none; background: #fff; color: #d97706; border-radius: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size:0.85rem;">重新開始 (${errorCounts.repair_restart})</button>
@@ -3688,12 +3860,20 @@ function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl, w
 
                 <div style="width:1px; height:22px; background:#e2e8f0; margin: 0 4px;"></div>
 
-                <!-- 💡 口語流暢：跟完整度/準確度/流利度一樣的色框標籤+按鈕結構，紫色。
-                     標籤本身點擊開浮框（分數+評語+TTS），裡面的「流暢度」按鈕維持原本的篩選/跳轉功能。 -->
-                <div style="border:2px solid #9333ea; border-radius:10px; padding:4px 8px 6px; background:#faf5ff; display:flex; flex-direction:column; gap:4px;">
-                    <span class="category-label-clickable" onclick="window.openCategoryFeedbackForStrip('${stripId}','fluency')" style="font-size:0.85rem; font-weight:bold; color:#9333ea; text-align:center; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:2px;">口語流暢<span style="font-size:0.7rem;">👆</span></span>
-                    <button class="wer-filter-btn-chunked" data-original-bg="#fff" data-original-color="#9333ea" onclick="window.switchWerFilterChunked(this, 'fluency', '${stripId}')" style="padding: 5px 12px; border:none; background: #fff; color: #9333ea; border-radius: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size:0.85rem;" title="按句子比對 nPVI/Varco 標準範圍：黃色=部分不合格，紅色=兩項都不合格">流暢度 (${fluencyFlaggedCount})</button>
+                <!-- 💡 口語流暢度：底層的「流暢度」按鈕隱藏起來，標籤點擊後觸發句子層級標色/跳轉 + LLM 評語+TTS。 -->
+                <div style="border:2px solid #9333ea; border-radius:10px; padding:6px 14px; background:#faf5ff;">
+                    <span class="category-label-clickable" onclick="window.openCategoryFeedbackForStrip('${stripId}','fluency')" style="font-size:0.85rem; font-weight:bold; color:#9333ea; text-align:center; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:2px; flex-wrap:wrap;">口語流暢度<span style="font-size:0.7rem; font-weight:normal;">(${fluencyFlaggedCount}/${totalSentenceCount})</span><span style="font-size:0.7rem;">👆</span></span>
+                    <div style="display:none;">
+                        <button class="wer-filter-btn-chunked" data-original-bg="#fff" data-original-color="#9333ea" onclick="window.switchWerFilterChunked(this, 'fluency', '${stripId}')" style="padding: 5px 12px; border:none; background: #fff; color: #9333ea; border-radius: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size:0.85rem;">流暢度 (${fluencyFlaggedCount})</button>
+                    </div>
                 </div>
+            </div>
+
+            <!-- 💡 上一個/下一個 錯誤跳轉導航，點擊四個色框標籤後才會出現，方便快速在多個問題點之間切換 -->
+            <div id="${stripId}-match-nav" style="display:none; align-items:center; gap:12px; margin-bottom: 10px; background:#fef2f2; border:1px solid #fecaca; padding:6px 14px; border-radius:20px; width:fit-content;">
+                <span onclick="window.navToMatch('${stripId}', -1)" title="上一個" style="cursor:pointer; font-size:1.1rem; color:#dc2626; font-weight:bold; user-select:none;">◀</span>
+                <span id="${stripId}-match-counter" style="font-size:0.8rem; color:#7f1d1d; font-weight:bold; white-space:nowrap;"></span>
+                <span onclick="window.navToMatch('${stripId}', 1)" title="下一個" style="cursor:pointer; font-size:1.1rem; color:#dc2626; font-weight:bold; user-select:none;">▶</span>
             </div>
 
             <div style="display:flex; align-items:center; gap:10px; margin-bottom: 10px; flex-wrap: wrap;">
@@ -3722,19 +3902,79 @@ function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl, w
 }
 
 /** 💡 點擊錯誤類別按鈕：只重繪逐字稿列，波形跟播放狀態維持不動 */
+/** 💡 上一個/下一個 錯誤跳轉：direction 傳 -1 是上一個，1 是下一個，會循環（最後一個按下一個回到第一個） */
+/** 💡 整篇模式：跳到上一段/下一段的開頭位置，direction 傳 -1 是上一段，1 是下一段，循環切換 */
+window.navToParagraph = function(stripId, direction) {
+    const widget = document.getElementById(`${stripId}-chunkwidget`);
+    if (!widget) return;
+
+    let paragraphStarts = [];
+    try { paragraphStarts = JSON.parse(widget.dataset.paragraphStarts || '[]'); } catch (e) { paragraphStarts = []; }
+    if (!paragraphStarts.length) return;
+
+    let pointer = parseInt(widget.dataset.paragraphPointer || '0', 10);
+    if (isNaN(pointer)) pointer = 0;
+    pointer = (pointer + direction + paragraphStarts.length) % paragraphStarts.length;
+    widget.dataset.paragraphPointer = String(pointer);
+
+    let layout = [];
+    try { layout = JSON.parse(widget.dataset.layout); } catch (e) { return; }
+
+    const idx = paragraphStarts[pointer];
+    const scrollWrap = document.getElementById(`${stripId}-scrollwrap`);
+    if (scrollWrap && layout[idx]) {
+        const targetLeft = Math.max(layout[idx].left - 60, 0);
+        scrollWrap.scrollTo({ left: targetLeft, behavior: 'smooth' });
+    }
+
+    const counterEl = document.getElementById(`${stripId}-paragraph-counter`);
+    if (counterEl) counterEl.textContent = `第 ${pointer + 1} / ${paragraphStarts.length} 段`;
+};
+
+window.navToMatch = function(stripId, direction) {
+    const widget = document.getElementById(`${stripId}-chunkwidget`);
+    if (!widget) return;
+
+    let indices = [];
+    try { indices = JSON.parse(widget.dataset.matchIndices || '[]'); } catch (e) { indices = []; }
+    if (!indices.length) return;
+
+    let pointer = parseInt(widget.dataset.matchPointer || '0', 10);
+    if (isNaN(pointer)) pointer = 0;
+    pointer = (pointer + direction + indices.length) % indices.length;
+    widget.dataset.matchPointer = String(pointer);
+
+    let layout = [];
+    try { layout = JSON.parse(widget.dataset.layout); } catch (e) { return; }
+
+    const idx = indices[pointer];
+    const scrollWrap = document.getElementById(`${stripId}-scrollwrap`);
+    if (scrollWrap && layout[idx]) {
+        const targetLeft = Math.max(layout[idx].left - 60, 0);
+        scrollWrap.scrollTo({ left: targetLeft, behavior: 'smooth' });
+    }
+
+    const counterEl = document.getElementById(`${stripId}-match-counter`);
+    if (counterEl) counterEl.textContent = `第 ${pointer + 1} / ${indices.length} 個`;
+};
+
 window.switchWerFilterChunked = function(btn, errorType, stripId) {
     const widget = document.getElementById(`${stripId}-chunkwidget`);
     if (!widget) return;
 
-    widget.querySelectorAll('.wer-filter-btn-chunked').forEach(b => {
-        const originalBg = b.dataset.originalBg || '#f1f5f9';
-        const originalColor = b.dataset.originalColor || '#475569';
-        b.style.background = originalBg;
-        b.style.color = originalColor;
-    });
-    const activeColor = btn.dataset.originalColor || '#e63946';
-    btn.style.background = activeColor;
-    btn.style.color = '#fff';
+    // 💡 btn 現在可能是 null（由「發音完整度」等色框標籤直接觸發，不是點擊底層已隱藏的個別按鈕），
+    //    只有真的有傳入 btn 時，才需要更新按鈕本身的選取視覺樣式。
+    if (btn) {
+        widget.querySelectorAll('.wer-filter-btn-chunked').forEach(b => {
+            const originalBg = b.dataset.originalBg || '#f1f5f9';
+            const originalColor = b.dataset.originalColor || '#475569';
+            b.style.background = originalBg;
+            b.style.color = originalColor;
+        });
+        const activeColor = btn.dataset.originalColor || '#e63946';
+        btn.style.background = activeColor;
+        btn.style.color = '#fff';
+    }
 
     // 💡 記住目前選取的篩選類別，縮放滑桿重繪逐字稿列時要保留這個篩選狀態
     widget.dataset.activeCategory = errorType || '';
@@ -3750,24 +3990,42 @@ window.switchWerFilterChunked = function(btn, errorType, stripId) {
 
     const transcriptRow = document.getElementById(`${stripId}-transcript`);
     if (transcriptRow) {
-        transcriptRow.innerHTML = renderChunkTranscriptRow(layout, errorType, chunkFluencyMap);
+        transcriptRow.innerHTML = renderChunkTranscriptRow(layout, errorType || null, chunkFluencyMap);
     }
 
-    // 💡 自動捲動到「第一個」命中的位置，波形跟逐字稿是同一個捲動容器，
-    //    一次捲動兩者都會一起移動過去，不用使用者自己手動找。
-    const firstIdx = isFluencyMode
-        ? findFirstFlaggedSentenceIndex(layout, chunkFluencyMap)
-        : findFirstErrorLayoutIndex(layout, errorType);
-    const scrollWrap = document.getElementById(`${stripId}-scrollwrap`);
-    if (firstIdx >= 0 && scrollWrap && layout[firstIdx]) {
-        const targetLeft = Math.max(layout[firstIdx].left - 60, 0); // 往前留一點邊界，不要貼死在最左邊
-        scrollWrap.scrollTo({ left: targetLeft, behavior: 'smooth' });
-    } else if (firstIdx === -1) {
-        showToast(isFluencyMode ? '這份錄音的句子流暢度都合格 🎉' : '這個類別目前沒有任何錯誤 🎉');
+    const matchNav = document.getElementById(`${stripId}-match-nav`);
+    const matchCounter = document.getElementById(`${stripId}-match-counter`);
+
+    // 💡 errorType 是空值（例如「發音準確度」故意不標色，純顯示評語）：
+    //    只重繪成無標色的預設樣式，不需要自動捲動、跳提示訊息，也不用顯示上一個/下一個導航列。
+    if (errorType) {
+        // 💡 算出「全部」命中的位置，存進 widget，讓上一個/下一個箭頭可以在裡面循環切換，
+        //    不用每次都只能停在第一個、後面的要自己手動拉捲軸找。
+        const allIndices = isFluencyMode
+            ? findAllFlaggedSentenceIndices(layout, chunkFluencyMap)
+            : findAllErrorLayoutIndices(layout, errorType);
+
+        widget.dataset.matchIndices = JSON.stringify(allIndices);
+        widget.dataset.matchPointer = '0';
+
+        const scrollWrap = document.getElementById(`${stripId}-scrollwrap`);
+        if (allIndices.length > 0) {
+            const targetLeft = Math.max(layout[allIndices[0]].left - 60, 0); // 往前留一點邊界，不要貼死在最左邊
+            if (scrollWrap) scrollWrap.scrollTo({ left: targetLeft, behavior: 'smooth' });
+
+            if (matchNav) matchNav.style.display = 'flex';
+            if (matchCounter) matchCounter.textContent = `第 1 / ${allIndices.length} 個`;
+        } else {
+            if (matchNav) matchNav.style.display = 'none';
+            showToast(isFluencyMode ? '這份錄音的句子流暢度都合格 🎉' : '這個類別目前沒有任何錯誤 🎉');
+        }
+    } else {
+        if (matchNav) matchNav.style.display = 'none';
+        widget.dataset.matchIndices = '[]';
+        widget.dataset.matchPointer = '0';
     }
 
-    // 💡 「流暢度」按鈕現在只負責篩選/標色（跟其他 6 個 WER 類別按鈕行為一致），
-    //    不再觸發浮框或語音——浮框改由旁邊獨立的「口語流暢」色框標籤負責（點擊呼叫 openCategoryFeedbackForStrip）。
+    // 💡 「發音完整度/發音準確度/口說流利度/口語流暢度」四個色框標籤現在同時負責標色+浮框評語+TTS，
     //    切換到任何分類時，如果評語還在播放中，先停掉，避免背景一直放著跟目前畫面對不上。
     if (speechSynthesis.speaking) speechSynthesis.cancel();
 };
@@ -3795,6 +4053,17 @@ function initChunkedAudioBlock(stripId) {
     try { rawGroups = JSON.parse(widget.dataset.rawGroups); } catch (e) { rawGroups = []; }
     const audioUrl = widget.dataset.audioUrl || '';
     const basePxPerSec = parseFloat(widget.dataset.basePxPerSec) || 90;
+
+    // 💡 整篇模式：如果有段落分界資料（超過 1 段），顯示「上一段/下一段開頭」導航
+    let paragraphStarts = [];
+    try { paragraphStarts = JSON.parse(widget.dataset.paragraphStarts || '[]'); } catch (e) { paragraphStarts = []; }
+    const paragraphNav = document.getElementById(`${stripId}-paragraph-nav`);
+    const paragraphCounter = document.getElementById(`${stripId}-paragraph-counter`);
+    if (paragraphStarts.length > 1 && paragraphNav) {
+        paragraphNav.style.display = 'flex';
+        widget.dataset.paragraphPointer = '0';
+        if (paragraphCounter) paragraphCounter.textContent = `第 1 / ${paragraphStarts.length} 段`;
+    }
 
     if (typeof WaveSurfer === 'undefined') {
         console.warn('⚠️ WaveSurfer 尚未載入，無法顯示波形');
@@ -3825,6 +4094,28 @@ function initChunkedAudioBlock(stripId) {
     });
     waveformEl._wsInstance = ws;
 
+    // 💡 波形點擊播放/停止切換：如果目前正在播放，點擊（不管點哪裡）就停止；
+    //    如果目前沒在播放，才從「滑鼠實際點擊的位置」開始播放（不是固定跳到色塊/區段的開頭）。
+    let currentPxPerSec = basePxPerSec; // 💡 追蹤目前實際的每秒像素值，縮放滑桿變動時會更新，確保點擊位置換算成時間時比例正確
+
+    function toggleWavePlaybackFrom(seekTime) {
+        if (ws.isPlaying()) {
+            ws.pause();
+        } else {
+            if (seekTime != null) ws.setTime(seekTime);
+            ws.play();
+        }
+    }
+
+    /** 💡 把滑鼠點擊事件的畫面座標，換算成波形上對應的實際時間點（秒） */
+    function getClickedTimeFromEvent(e) {
+        const rect = waveformEl.getBoundingClientRect();
+        const clickX = e.clientX - rect.left; // getBoundingClientRect 本身就會反映目前捲動後的位置，不用額外扣掉 scrollLeft
+        return Math.max(clickX / currentPxPerSec, 0);
+    }
+
+    let lastRegionClickAt = 0; // 💡 用來避免色塊點擊跟下面的 'interaction' 事件同一次點擊觸發兩次
+
     // 💡 用 Regions 外掛把淺藍/淺綠交錯的「句子分段」色塊直接疊加在波形上（跟逐字對齊的位置分開處理，
     //    這裡永遠是句子層級，不會因為逐字對齊而變成一堆碎顏色）。
     //    改綁在 'ready'（完全載入完成才觸發一次），避免 'decode' 在載入過程中
@@ -3845,15 +4136,25 @@ function initChunkedAudioBlock(stripId) {
                     drag: false,
                     resize: false
                 });
-                // 💡 點擊色塊：直接跳到那一段開頭並播放
+                // 💡 點擊色塊：播放/停止切換，從「滑鼠實際點的位置」開始播放，不是整個色塊的開頭
                 region.on('click', (e) => {
                     e.stopPropagation();
-                    ws.setTime(c.xmin);
-                    ws.play();
+                    lastRegionClickAt = Date.now();
+                    const clickedTime = getClickedTimeFromEvent(e);
+                    toggleWavePlaybackFrom(clickedTime);
                 });
             });
         });
     }
+
+    // 💡 點擊波形上「沒有色塊覆蓋」的空白部分（例如色塊之間的停頓區域），
+    //    也要套用同樣的播放/停止切換邏輯，而不是只有色塊本身有作用。
+    //    WaveSurfer 的 'interaction' 事件在使用者點擊/拖曳波形本體時觸發，
+    //    此時已經自動 seek 到點擊位置，所以這裡只需要判斷要「播放」還是「停止」。
+    ws.on('interaction', () => {
+        if (Date.now() - lastRegionClickAt < 150) return; // 剛剛已經由色塊點擊處理過了，避免同一次點擊觸發兩次
+        toggleWavePlaybackFrom(null);
+    });
 
     if (playBtn) {
         playBtn.addEventListener('click', () => ws.playPause());
@@ -3915,6 +4216,7 @@ function initChunkedAudioBlock(stripId) {
             if (zoomLabel) zoomLabel.textContent = Math.round(factor * 100) + '%';
 
             const newPxPerSec = basePxPerSec * factor;
+            currentPxPerSec = newPxPerSec; // 💡 同步更新，確保縮放後點擊波形換算的時間位置還是準確的
 
             try { ws.zoom(newPxPerSec); } catch (e) { console.warn('WaveSurfer 縮放失敗:', e); }
 
@@ -3968,13 +4270,29 @@ function initChunkedAudioBlock(stripId) {
     }
 
     // 💡 點擊逐字稿：
-    //    - 流暢度模式：點任一個字，用 TTS 唸出整句正確版本（原本就有的行為）。
+    //    - 黑色正確課文文字（任何模式下都可以點）：從這個字開始往下念到底，再點同一個字則暫停/繼續。
+    //    - 流暢度模式：點任一個字（非黑色課文本身），用 TTS 唸出整句正確版本（原本就有的行為）。
     //    - WER 錯誤類別模式（重複/替換/刪除...等）：點擊「命中該類別的紅字」，
     //      即時跟後端要一句音節拆解的發音教學提示，用小泡泡顯示在那個字下方。
     const transcriptRowEl = document.getElementById(`${stripId}-transcript`);
     if (transcriptRowEl) {
         transcriptRowEl.addEventListener('click', (e) => {
             if (dragMoved) return; // 剛剛是拖曳捲動，不是真的點擊，不要誤觸發
+
+            // 💡 優先判斷：點的是不是黑色正確課文文字本身
+            const refSpan = e.target.closest('.ref-word-span');
+            if (refSpan) {
+                const block = refSpan.closest('.chunk-transcript-block');
+                if (!block) return;
+                const wordIdx = parseInt(block.dataset.wordIdx, 10);
+                if (isNaN(wordIdx)) return;
+
+                let layoutForRead = [];
+                try { layoutForRead = JSON.parse(widget.dataset.layout); } catch (err) { return; }
+
+                window.toggleReadFromWord(stripId, layoutForRead, wordIdx);
+                return;
+            }
 
             const errorBadge = e.target.closest('.wer-error-word-badge');
             if (errorBadge && widget.dataset.activeCategory && widget.dataset.activeCategory !== 'fluency') {
@@ -4041,6 +4359,23 @@ function renderMultipleParagraphsReport(paragraphList, globalStats, mode = 'segm
                 : '📊 分段式練習 朗讀結算';
         }
 
+        // 💡 「段落詳細回報&分析」這個小標題不是用 JS 動態產生的固定文字（是寫死在 main.html 裡），
+        //    這裡用文字比對的方式找到那個元素，whole 模式時動態換成「整篇詳細回報&分析」，
+        //    分段模式時換回「段落詳細回報&分析」，不用去改 HTML 原始檔。
+        (function updateDetailReportSectionTitle() {
+            const allEls = document.querySelectorAll('h1, h2, h3, h4, h5, span, div, p, label');
+            for (const el of allEls) {
+                if (el.children.length > 0) continue; // 只找「純文字」的葉節點，避免改到外層大容器
+                const text = (el.textContent || '').trim();
+                if (text.includes('段落詳細回報') || text.includes('整篇詳細回報')) {
+                    el.textContent = text
+                        .replace('段落詳細回報', isWhole ? '整篇詳細回報' : '段落詳細回報')
+                        .replace('整篇詳細回報', isWhole ? '整篇詳細回報' : '段落詳細回報');
+                    break;
+                }
+            }
+        })();
+
         const container = document.getElementById('werParagraphsContainer');
         if (!container) return;
         container.innerHTML = '';
@@ -4093,7 +4428,7 @@ function renderMultipleParagraphsReport(paragraphList, globalStats, mode = 'segm
                 : `<span style="color: #64748b; font-weight: bold; background: #f1f5f9; padding: 4px 12px; border-radius: 8px; font-size: 0.85rem;">✕ 未錄音</span>`;
 
             const header = document.createElement('div');
-            header.style.cssText = `padding: 18px 24px; background: ${hasRecorded ? '#f8fafc' : '#fcfcfc'}; display: flex; align-items: center; justify-content: space-between; cursor: ${hasRecorded ? 'pointer' : 'not-allowed'}; opacity: ${hasRecorded ? '1' : '0.65'};`;
+            header.style.cssText = `padding: 18px 24px; background: ${hasRecorded ? '#f8fafc' : '#fcfcfc'}; display: flex; align-items: center; justify-content: space-between; cursor: ${(hasRecorded && !isWhole) ? 'pointer' : 'default'}; opacity: ${hasRecorded ? '1' : '0.65'};`;
             header.innerHTML = `
                 <div style="display: flex; align-items: center; gap: 30px; flex: 1; flex-wrap: wrap;">
                     <span style="font-weight: bold; color: #1f2937; min-width: 65px; font-size: 1.05rem;">${paraLabel}</span>
@@ -4106,12 +4441,13 @@ function renderMultipleParagraphsReport(paragraphList, globalStats, mode = 'segm
                     </div>
                 </div>
                 <div style="display: flex; align-items: center; gap: 8px;">
-                    ${hasRecorded ? '<span style="color: #a0aec0; font-size: 0.85rem;">展開對照</span> <span class="arrow-icon" style="transition: transform 0.2s; color: #cbd5e1;">▼</span>' : ''}
+                    ${(hasRecorded && !isWhole) ? '<span style="color: #a0aec0; font-size: 0.85rem;">展開對照</span> <span class="arrow-icon" style="transition: transform 0.2s; color: #cbd5e1;">▼</span>' : ''}
                 </div>
             `;
 
             const body = document.createElement('div');
-            body.style.cssText = 'padding: 24px; display: none; background: #ffffff; border-top: 1px solid #edf2f7; flex-direction: column; gap: 24px;';
+            // 💡 whole 模式：不需要手風琴收合，直接展開顯示（display:flex），不是 none
+            body.style.cssText = `padding: 24px; display: ${isWhole && hasRecorded ? 'flex' : 'none'}; background: #ffffff; border-top: 1px solid #edf2f7; flex-direction: column; gap: 24px;`;
 
             if (hasRecorded) {
                 // 🚀 雷達圖改成四個維度（0~5分，來自 Ollama 評分），資料直接來自 para 物件（DB 欄位）
@@ -4153,58 +4489,71 @@ function renderMultipleParagraphsReport(paragraphList, globalStats, mode = 'segm
                 const chunkListForWidget = extendedReport.chunk_details || [];
                 const wordTimingsForWidget = extendedReport.word_timings || [];
                 const sentenceFluencyForWidget = extendedReport.sentence_fluency || [];
+                // 💡 整篇模式才需要傳入原始段落陣列，用來估算段落分界位置（供「下一段開頭」導航使用）
+                const originalParagraphsForWidget = (isWhole && state.article && Array.isArray(state.article.paragraphs))
+                    ? state.article.paragraphs
+                    : null;
                 const chunkedAudioHTML = buildChunkedAudioBlock(
                     stripId, chunkListForWidget, alignments, para.file_path || '', wordTimingsForWidget, sentenceFluencyForWidget,
                     fluencyFeedbackText, completenessFeedbackText, accuracyFeedbackText, werFluencyFeedbackText,
-                    para.fluency_score_100, para.score_completeness, para.score_accuracy, para.score_fluency
+                    para.fluency_score_100, para.score_completeness, para.score_accuracy, para.score_fluency,
+                    originalParagraphsForWidget
                 );
 
                 body.innerHTML = chartsHTML + chunkedAudioHTML;
 
-                // ── 手風琴展開事件 (延遲加載雷達圖) ──
-                header.addEventListener('click', () => {
-                    const isHidden = body.style.display === 'none';
-                    body.style.display = isHidden ? 'flex' : 'none';
-                    header.querySelector('.arrow-icon').style.transform = isHidden ? 'rotate(180deg)' : 'rotate(0deg)';
-                    header.style.background = isHidden ? '#f1f5f9' : '#f8fafc';
+                // 💡 把雷達圖渲染邏輯抽成函式，whole 模式立即呼叫、分段模式維持點擊展開才呼叫（延遲加載）
+                const renderRadarChartOnce = () => {
+                    if (body.dataset.chartRendered) return;
+                    body.dataset.chartRendered = 'true';
 
-                    // 如果是展開狀態且尚未繪製過雷達圖
-                    if (isHidden && !body.dataset.chartRendered) {
-                        body.dataset.chartRendered = 'true';
-                        
-                        const canvas = body.querySelector('.radar-canvas');
-                        if (canvas) {
-                            new Chart(canvas.getContext('2d'), {
-                                type: 'radar',
-                                data: {
-                                    labels: ['完整度', '準確度', '流利度', '語法'],
-                                    datasets: [{
-                                        label: '評分 (0-5)',
-                                        data: radarScores,
-                                        backgroundColor: 'rgba(230, 57, 70, 0.2)',
-                                        borderColor: '#e63946',
-                                        pointBackgroundColor: '#e63946',
-                                        borderWidth: 2
-                                    }]
+                    const canvas = body.querySelector('.radar-canvas');
+                    if (canvas) {
+                        new Chart(canvas.getContext('2d'), {
+                            type: 'radar',
+                            data: {
+                                labels: ['發音完整度', '發音準確度', '口說流利度', '語法'],
+                                datasets: [{
+                                    label: '評分 (0-5)',
+                                    data: radarScores,
+                                    backgroundColor: 'rgba(230, 57, 70, 0.2)',
+                                    borderColor: '#e63946',
+                                    pointBackgroundColor: '#e63946',
+                                    borderWidth: 2
+                                }]
+                            },
+                            options: {
+                                responsive: true,
+                                maintainAspectRatio: false,
+                                scales: {
+                                    r: {
+                                        beginAtZero: true,
+                                        min: 0,
+                                        max: 5,
+                                        ticks: { stepSize: 1, backdropColor: 'transparent' },
+                                        pointLabels: { font: { size: 12, weight: 'bold' }, color: '#475569' }
+                                    }
                                 },
-                                options: {
-                                    responsive: true,
-                                    maintainAspectRatio: false,
-                                    scales: {
-                                        r: {
-                                            beginAtZero: true,
-                                            min: 0,
-                                            max: 5,
-                                            ticks: { stepSize: 1, backdropColor: 'transparent' },
-                                            pointLabels: { font: { size: 12, weight: 'bold' }, color: '#475569' }
-                                        }
-                                    },
-                                    plugins: { legend: { display: false } }
-                                }
-                            });
-                        }
+                                plugins: { legend: { display: false } }
+                            }
+                        });
                     }
-                });
+                };
+
+                if (isWhole) {
+                    // 💡 whole 模式：不用等點擊展開，內容本來就是展開狀態，圖表直接畫
+                    renderRadarChartOnce();
+                } else {
+                    // ── 分段模式：手風琴展開事件 (延遲加載雷達圖) ──
+                    header.addEventListener('click', () => {
+                        const isHidden = body.style.display === 'none';
+                        body.style.display = isHidden ? 'flex' : 'none';
+                        header.querySelector('.arrow-icon').style.transform = isHidden ? 'rotate(180deg)' : 'rotate(0deg)';
+                        header.style.background = isHidden ? '#f1f5f9' : '#f8fafc';
+
+                        if (isHidden) renderRadarChartOnce();
+                    });
+                }
             }
 
             strip.appendChild(header);
@@ -4215,6 +4564,19 @@ function renderMultipleParagraphsReport(paragraphList, globalStats, mode = 'segm
                 initChunkedAudioBlock(stripId);
             }
         });
+
+        // 💡 新增：報告最下方加一個「反覆練習」按鈕，功能跟左上角轉圈箭頭的複習按鈕一致
+        //    （直接呼叫同一個 createNewProject('retry')），用同一篇文章的內容重新開始一次新的練習。
+        if (typeof createNewProject === 'function') {
+            const retryWrap = document.createElement('div');
+            retryWrap.style.cssText = 'width:100%; display:flex; justify-content:center; margin-top:20px; padding-top:16px; border-top:1px solid #e2e8f0;';
+            retryWrap.innerHTML = `
+                <button type="button" onclick="createNewProject('retry')" style="display:flex; align-items:center; gap:8px; padding:10px 24px; border:none; background:#2563eb; color:#fff; border-radius:24px; font-weight:bold; font-size:0.9rem; cursor:pointer; box-shadow:0 2px 8px rgba(37,99,235,0.3);">
+                    <span style="font-size:1.1rem;">🔄</span> 反覆練習
+                </button>
+            `;
+            container.appendChild(retryWrap);
+        }
 
     } catch (err) {
         console.error("❌ 渲染歷史大禮包手風琴失敗:", err);
