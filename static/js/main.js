@@ -2365,12 +2365,22 @@ function _resizeMaskSlots() {
     const gap        = parseFloat(areaStyle.columnGap || areaStyle.gap) || 16;
 
     const rect = area.getBoundingClientRect();
-    const availableWidth  = rect.width  - padLeft - padRight  - gap * (slots.length - 1);
-    const availableHeight = rect.height - padTop  - padBottom;
+    const isColumn = areaStyle.flexDirection === 'column';
 
-    // 正方形邊長 = min(平分後的寬度, 容器高度, 320px上限)
-    let size = Math.min(availableWidth / slots.length, availableHeight, 320);
-    if (!isFinite(size) || size < 20) size = 20; // 極端情況下的保底最小值，避免縮成 0 或負值
+    let size;
+    if (isColumn) {
+        // 手機版直向堆疊：不除以張數，每張圖直接盡量佔滿容器寬度，
+        // 超出高度交給 overflow-y:auto 滑動，上限拉高讓圖片明顯變大
+        const availableWidth = rect.width - padLeft - padRight;
+        const maxSize = window.innerWidth <= 480 ? 460 : 520;
+        size = Math.min(availableWidth, maxSize);
+    } else {
+        // 桌機版橫向並排：維持原本邏輯
+        const availableWidth  = rect.width  - padLeft - padRight  - gap * (slots.length - 1);
+        const availableHeight = rect.height - padTop  - padBottom;
+        size = Math.min(availableWidth / slots.length, availableHeight, 320);
+    }
+    if (!isFinite(size) || size < 20) size = 20;
 
     slots.forEach(slot => {
         slot.style.setProperty('width',  size + 'px', 'important');

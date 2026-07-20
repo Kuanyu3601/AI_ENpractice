@@ -141,4 +141,11 @@
     nav {
         padding-left: 56px;
     }
+
+    .user-btn {
+      padding: 6px 0px;
+      margin-right: 0px;
+
+
+  }
 }

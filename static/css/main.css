@@ -2046,13 +2046,14 @@ body, html {
 
 .flip-hint-text {
     margin: 0;
-    font-size: clamp(0.75rem, 1.6vw, 1rem);
+    font-size: clamp(1rem, 2vw, 1.3rem);
     line-height: 1.5;
     color: #2c4a6e;
     text-align: center;
     word-break: break-word;
     user-select: none;
     white-space: pre-line;
+    
 }
 
 /* ── 手機版：朗讀／遮擋按鈕改到文章上方 ── */
@@ -2201,28 +2202,70 @@ body, html {
         z-index: 399;   /* 低於側欄的 z-index:400，蓋在其他內容之上 */
     }
 
-    /* ── 遮擋後的圖片排列改成直向（分段練習、整篇練習共用同一個元素，一起生效） ── */
+    /* ── 遮擋後的圖片排列：直向單欄堆疊，圖片放大並用 vw 為基準的 clamp 跟著螢幕寬度縮放，
+       但用 aspect-ratio 鎖死正方形，寬度變大時高度同步等比放大，不會變形 ──
+       （分段練習、整篇練習共用同一個元素，一起生效） */
     .mask-image-area.visible {
+        display: flex !important;
         flex-direction: column !important;
         align-items: center !important;
         justify-content: flex-start !important;
-        gap: 12px !important;
-        padding: 8px !important;   /* 💡 原本 16px 20px，縮小內距讓圖片有更多寬度可用 */
-        overflow-y: auto;   /* 三張直向排列可能超出可視高度，允許滾動查看 */
+        gap: 14px !important;
+        padding: 8px !important;   /* 縮小內距讓圖片有更多寬度可用 */
+        overflow-y: auto;   /* 直向堆疊可能超出可視高度，允許滾動查看 */
         scroll-behavior: smooth;      /* 💡 跟字幕區 .lyrics-view 一樣的滑動手感 */
         scrollbar-width: none;        /* 隱藏捲軸，但還是可以滑動 */
     }
     .mask-image-area.visible::-webkit-scrollbar { display: none; }
  
+
+    /* ── 整篇練習模式的換頁箭頭：原本用 position:absolute 疊在圖片上面，
+       手機版直向排列時改成排進正常版面流，放到最下方一張圖片的下面，不要疊在圖片上 ── */
+    .mask-image-area .lyric-nav-arrows {
+        position: static !important;
+        left: auto !important;
+        right: auto !important;
+        bottom: auto !important;
+        width: clamp(280px, 94vw, 520px) !important;   /* 跟圖片同寬，視覺對齊 */
+        max-width: 96% !important;
+        margin: 0px auto 5px !important;
+        flex: 0 0 auto !important;
+        pointer-events: auto;
+    }
+    
     .mask-img-slot {
-        width: 100% !important;
-        max-width: none !important;   /* 💡 拿掉寫死的像素上限（370px），改由外層容器的百分比決定大小，跟裝置寬度連動 */
-        height: auto !important;   /* 改用 aspect-ratio 撐出正方形，而不是塞滿父層高度 */
+        width: clamp(220px, 78vw, 380px) !important;
+        /* 💡 核心：用 vw 當單位，螢幕越寬圖片越大、螢幕越窄圖片越小；aspect-ratio 鎖住正方形，高度自動等比跟著寬度變化，不會被拉扁或拉長 */
+        max-width: 96% !important;   /* 保留一點左右邊距，避免貼邊 */
+        height: auto !important;
+        aspect-ratio: 1 / 1 !important;
         flex: 0 0 auto !important; /* 不要平分高度，改成依內容各自堆疊 */
     }
  
     /* 💡 真正卡住圖片寬度的關鍵：record-main 原本最大只到螢幕的 94%，手機版放寬到 99% */
     .record-main {
         max-width: 99%;
+    }
+
+    
+    .flip-hint-text {
+        font-size: 1.6rem !important;
+        line-height: 1.45 !important;
+    }
+}
+
+/* ── 更窄的手機（例如 iPhone SE 等 <=480px）：把可放大的比例再拉高一些，
+   讓小螢幕上圖片依然夠大、清楚可見 ── */
+@media (max-width: 480px) {
+    .mask-img-slot {
+        width: clamp(200px, 84vw, 340px) !important;
+    }
+
+    .mask-image-area .lyric-nav-arrows {
+        width: clamp(200px, 84vw, 340px) !important;
+    }
+
+    .flip-hint-text {
+        font-size: 1.4rem !important;
     }
 }
