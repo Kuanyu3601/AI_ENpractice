@@ -165,6 +165,36 @@ document.addEventListener('click', (e) => {
     }
 });
 
+function relayoutMobileControls() {
+    const functionEl    = document.getElementById('function');
+    const mobileRow      = document.getElementById('mobileControlsRow');
+    const lyricsWrapper  = document.getElementById('lyricsWrapper');
+    const lyricsView     = document.getElementById('lyricsView');
+    if (!functionEl || !mobileRow || !lyricsWrapper || !lyricsView) return;
+
+    const isMobile = window.innerWidth <= 768;
+
+    if (isMobile) {
+        // 手機版：把按鈕搬進段落列所在的共用列（跟在段落按鈕後面，形成同一排）
+        if (functionEl.parentElement !== mobileRow) {
+            mobileRow.appendChild(functionEl);
+        }
+    } else {
+        // 桌面版：搬回原本位置（字幕區 #lyricsView 之前）
+        if (functionEl.parentElement !== lyricsWrapper || functionEl.nextElementSibling !== lyricsView) {
+            lyricsWrapper.insertBefore(functionEl, lyricsView);
+        }
+    }
+}
+
+document.addEventListener('DOMContentLoaded', relayoutMobileControls);
+window.addEventListener('resize', () => {
+    clearTimeout(window._controlsRelayoutTimer);
+    window._controlsRelayoutTimer = setTimeout(relayoutMobileControls, 80);
+});
+
+
+
 // Kitten's_Choice 各段提示圖片設定
 // 格式：每個段落（索引0, 1, 2...）對應三張圖片的路徑
 // 請把 src 換成你實際的檔案路徑
@@ -574,7 +604,7 @@ function bindEvents() {
     safeBind('modalConfirmBtn', 'click', confirmAge);
     safeBind('prevArrow', 'click', () => navigateStep(-1));
     safeBind('nextArrow', 'click', () => navigateStep(1));
-    safeBind('clearBtn', 'click', clearSelection);
+    
     safeBind('startBtn', 'click', startPractice);
     safeBind('recordBtn', 'click', toggleRecord);
     safeBind('uploadAudioBtn', 'click', uploadAudio);
@@ -855,14 +885,44 @@ function renderPreview(article) {
     }
 }
 
-function clearSelection() {
-    state.article = null;
-    document.querySelectorAll('.article-card').forEach(c => c.classList.remove('selected'));
-    document.getElementById('selectedPreview').classList.remove('visible');
-    document.getElementById('startBtn').disabled = true;
-    document.getElementById('readingCountNum').textContent = '—';
-    document.getElementById('readingHistoryList').innerHTML = '<p class="dropdown-empty">請先選擇文章</p>';
+// 💡 依目前作用中的專案是否為「複習」，決定文章預覽右上角清除鍵要不要顯示。
+//    第一次練習 → 顯示清除鍵（可清除文章、回到只有選擇文章的狀態）
+//    複習(retry) → 隱藏清除鍵（不可清除文章）
+function _updateClearBtnVisibility() {
+    const clearBtn = document.getElementById('clearBtn');
+    if (!clearBtn) return;
+    const proj = state.projects[state.activeProjectId];
+    clearBtn.style.display = (proj && proj.isRetry) ? 'none' : '';
 }
+
+function renderPreview(article) {
+    if (!article || !article.paragraphs) return;
+
+    const titleEl = document.getElementById('previewTitle');
+    const contentEl = document.getElementById('previewContent');
+    const areaEl = document.getElementById('selectedPreview');
+
+    if (titleEl) titleEl.textContent = `${article.title}`;
+
+    if (contentEl) {
+        contentEl.innerHTML = article.paragraphs.map((p, i) => `
+            <div class="preview-para">
+                <span class="para-tag">段落 ${i + 1}</span>
+                <p>${p}</p>
+            </div>
+        `).join('');
+    }
+
+    if (areaEl) {
+        areaEl.classList.add('visible');
+        areaEl.style.display = 'block';
+    }
+
+    _updateClearBtnVisibility();   // 💡 新增：依複習/首次決定清除鍵顯示
+}
+
+
+
 
 function processFile(file) {
     if (!file.name.endsWith('.txt')) {
@@ -1824,13 +1884,20 @@ async function createNewProject(type) {
         });
     }
     else {
-        // 新增模式防呆：避免重複建立空專案
-        const hasEmpty = Object.values(state.projects).find(p => !p.article);
-        if (hasEmpty) {
-            showToast('請先完成目前的未命名專案');
-            await switchProject(hasEmpty.id);
-            return;
-        }
+        // 💡 新增模式：一律開全新的一張。
+        //    把先前殘留、還沒選文章的空殼專案（article 為空）直接清掉，
+        //    不要再切換過去，避免「按新增卻跳回舊的未命名/複習專案」。
+        Object.values(state.projects)
+            .filter(p => !p.article)
+            .forEach(p => {
+                delete state.projects[p.id];
+                // 順手把該空殼在 localStorage 裡的練習模式紀錄也移除，保持乾淨
+                try {
+                    const map = JSON.parse(localStorage.getItem(PRACTICE_MODE_STORAGE_KEY) || '{}');
+                    delete map[p.id];
+                    localStorage.setItem(PRACTICE_MODE_STORAGE_KEY, JSON.stringify(map));
+                } catch (e) { /* 忽略 */ }
+            });
     }
 
     // 建立新專案資料結構
@@ -1844,6 +1911,7 @@ async function createNewProject(type) {
         // 💡 重錄同一篇文章時延續原本的練習模式；全新專案則預設分段練習
         practiceMode: initialPracticeMode,
         recordings: [],
+        isRetry: (type === 'retry'),
         date: new Date().toLocaleString('zh-TW', { hour12: false })
     };
     // 💡 立即寫入 localStorage，避免建立後、選擇模式前就重新整理分頁而遺失這個設定
@@ -1922,7 +1990,9 @@ async function switchProject(projectId) {
         }
 
         if (state.currentStep === 0) {
-            document.getElementById('chatTitle').textContent = `🔄 複習：${state.article.title}`;
+            const proj = state.projects[projectId];
+            const prefix = (proj && proj.isRetry) ? '🔄 複習：' : '📄 ';
+            document.getElementById('chatTitle').textContent = `${prefix}${state.article.title}`;
             if (previewArea) {
                 previewArea.style.display = 'block';
                 previewArea.classList.add('visible');

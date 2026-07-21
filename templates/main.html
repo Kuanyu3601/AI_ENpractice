@@ -218,16 +218,19 @@
             <!-- ── Step 2: Recording ── -->
             <div class="step-panel" id="panel-1">
                 <div class="record-section" id="recordSection">
-                    <div class="para-sidebar" id="paraSidebar">
-                        <div class="paragraph-progress" id="paragraphProgress">段落 1 / 4</div>
+                    <div class="mobile-controls-row" id="mobileControlsRow">
+                        <div class="para-sidebar" id="paraSidebar">
+                            <div class="paragraph-progress" id="paragraphProgress">段落 1 / 4</div>
 
-                        <div class="para-overview-strip" id="paraOverviewStrip"></div>
+                            <div class="para-overview-strip" id="paraOverviewStrip"></div>
+                        </div>
+                        <!-- 💡 手機版：JS 會把下方 #function（朗讀/遮擋按鈕）搬移到這一排，跟段落按鈕並排顯示 -->
                     </div>
 
 
                     <div class="record-content">
                         <div class="record-main">
-                            <div class="lyrics-wrapper">
+                            <div class="lyrics-wrapper" id="lyricsWrapper">
                                 <div class="select-function" id="function">
                                     <div class="sf-btn-group">
                                         <button class="sf-btn" id="ttsBtn" title="朗讀當前段落">
@@ -331,7 +334,15 @@
                         </div>
                     </div>
 
+                    
+
                 </div>
+
+                <div class="retry-practice-wrap">
+                        <button class="retry-practice-btn" onclick="createNewProject('retry')">
+                            🔄 重新練習
+                        </button>
+                    </div>
             </div>
         </div><!-- end .step-content -->
     </main>

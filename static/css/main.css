@@ -1010,6 +1010,13 @@ body, html {
     padding-bottom: 56px !important;
 }
 
+/* 💡 手機版專用的「段落＋功能按鈕」共用列容器。
+   桌面版用 display:contents 讓它完全不產生排版邊界，
+   裡面的 .para-sidebar 仍然直接參與 .record-section 的 flex 版面，跟原本一樣。 */
+.mobile-controls-row {
+    display: contents;
+}
+
 .para-sidebar {
     width: 100px;
     flex-shrink: 0;  /* 不壓縮 */
@@ -1078,6 +1085,7 @@ body, html {
 .para-pip {
     width: 28px;
     height: 28px;
+    flex-shrink: 0;
     border-radius: 50%;
     border: 2px solid rgba(85,133,181,0.25);
     background: #f2f7ff;
@@ -1618,6 +1626,36 @@ body, html {
     font-style: italic;
 }
 
+.retry-practice-wrap {
+    display: flex;
+    justify-content: center;
+    margin-top: 24px;
+    margin-bottom: 24px;
+    padding-top: 20px;
+    border-top: 1px solid #eee;   /* 跟上方評分內容做個分隔，不要就拿掉 */
+}
+
+.retry-practice-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 28px;
+    font-size: 16px;
+    font-weight: 600;
+    color: rgba(70, 70, 70, 1);
+    --tab-active: #e9f2ff;
+    background: #d3edfe;           /* 想跟複習鍵同色的話，改成複習鍵的顏色 */
+    border: 2px solid #4a90d9;
+    border-radius: 100px;
+    cursor: pointer;
+    transition: background 0.2s, transform 0.1s;
+}
+.retry-practice-btn:hover  { 
+    background: #3a7bc0; 
+    color: #fff;
+}
+.retry-practice-btn:active { transform: scale(0.97); }
+
 /* ══════════════════════════════════════════════════
    PROFILE PANEL
    ══════════════════════════════════════════════════ */
@@ -2061,30 +2099,35 @@ body, html {
     /* 朗讀／遮擋按鈕移到文章上方 + 側欄改為浮動覆蓋樣式 */
 .lyrics-wrapper {
         flex-direction: column;   /* 原本是 row，手機改成上下排列 */
-        height: clamp(260px, 42vh, 420px);   /* 💡 字幕區加大（原本 clamp(200px, 34vh, 340px)） */
+        height: clamp(280px, 46vh, 440px);   /* 💡 字幕區加大：按鈕搬到上方跟段落列同排後，這裡騰出更多空間 */
         min-height: 220px;
     }
  
+    /* 💡 手機版：朗讀/遮擋按鈕改跟段落按鈕擠在同一排（由 JS 搬到 #mobileControlsRow），不再自己佔一整排 */
     .select-function {
-        width: 100%;
+        width: auto;
+        flex-shrink: 0;
         padding-top: 0;
     }
  
     .sf-btn-group {
-        flex-direction: row;      /* 兩顆按鈕改成橫向並排在上方 */
-        justify-content: center;
-        width: 100%;
+        flex-direction: row;      /* 兩顆按鈕橫向並排 */
+        justify-content: flex-end;
+        width: auto;
         padding-top: 0;
-        margin-bottom: 10px;
+        margin-bottom: 0;
+        gap: 6px;
     }
  
     .sf-btn {
         flex-direction: row;      /* icon 和文字改成同一行，比較不佔高度 */
         width: auto;
         height: auto;
-        padding: 8px 16px;
-        gap: 6px;
+        padding: 6px 10px;
+        gap: 4px;
     }
+
+    .sf-btn-label { font-size: 0.6rem; }
  
 .sidebar {
         display: flex !important;   /* 蓋掉前面 .sidebar{display:none} 的規則 */
@@ -2146,26 +2189,38 @@ body, html {
         padding-left: 54px;
     }
 
-    /* ── 分段練習：段落選擇按鈕改橫向，移到朗讀/遮擋按鈕上方 ── */
+    /* ── 分段練習：段落選擇按鈕跟朗讀/遮擋按鈕合併成同一排 ── */
     .record-section {
-        flex-direction: column;   /* 原本是 row，改成上下堆疊，段落列自然跑到最上面 */
+        flex-direction: column;   /* 原本是 row，改成上下堆疊，共用列自然跑到最上面 */
+    }
+
+    /* 💡 段落按鈕 + 朗讀/遮擋按鈕的共用列：手機版才是真正的 flex row（桌面版是 display:contents） */
+    .mobile-controls-row {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 5px;
+        width: 100%;
+        padding: 5px 12px;
     }
 
     .para-sidebar {
-        width: 100%;
-        justify-content: center;
+        flex: 1 1 auto;            /* 跟功能按鈕共用寬度，段落列吃掉剩餘空間 */
+        width: auto;               /* 覆蓋桌面版固定的 100px */
+        min-width: 0;
+        justify-content: flex-start;
         flex-direction: row;       /* 按鈕改橫向排列 */
         align-items: center;
         border-right: none;        /* 原本直向時右側的分隔線，橫向不需要 */
-        padding: 12px 12px;
+        padding: 5px 15px;                /* 外距已經由 .mobile-controls-row 統一處理 */
         overflow-x: auto;
         overflow-y: visible;
     }
 
     .para-overview-strip {
         flex-direction: row;       /* 圓形段落按鈕改橫向排列 */
-        flex-wrap: wrap;
-        justify-content: center;
+        flex-wrap: nowrap;         /* 同一排空間有限，改成左右捲動而不是換行 */
+        justify-content: flex-start;
         padding: 0;
         width: auto;
     }
@@ -2178,20 +2233,20 @@ body, html {
         padding-left: 0;          /* 原本是幫直向段落列讓出的左邊距，橫向排列不需要了 */
     }
     
-    /* ── 整篇練習：沒有段落選擇列，比例要跟分段練習對齊，並把多出來的空間讓給字幕區 ── */
+    /* ── 整篇練習：沒有段落選擇列，共用列只剩朗讀/遮擋按鈕，改置中顯示 ── */
     .record-section.whole-mode .record-content {
         padding-left: 0;          /* 蓋掉全域設定的 20px，跟分段練習一致 */
+    }
+
+    .record-section.whole-mode .mobile-controls-row {
+        justify-content: center;
     }
  
     .record-section.whole-mode .lyrics-wrapper {
         height: clamp(300px, 52vh, 460px);   /* 沒有段落列佔用高度，字幕區可以更大（比分段練習再大一些） */
     }
 
-    /* ── 縮小錄音／報告按鈕區的空間，讓給字幕區 ── */
-    .record-controls {
-        max-height: clamp(150px, 22vh, 220px);   /* 原本 clamp(190px, 28vh, 280px) */
-        gap: 10px;                                /* 原本 14px，元素間距也稍微收緊 */
-    }
+   
 
     /* ── 歷史紀錄側欄打開時，其他區域變暗（跟個人資料面板一樣的效果） ── */
     body.sidebar-open::after {

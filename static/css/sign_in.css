@@ -274,19 +274,25 @@ main {
         flex-direction: column; /* 改為直向排列 */
         padding-left: 1rem;     /* 取消剛剛為了右移加的巨大 padding */
         padding-right: 1rem;
-        gap: 30px;              /* 調整卡片跟影片上下的間距 */
+        gap: 10px;              /* 調整卡片跟影片上下的間距 */
+    }
+
+    /* 👇 新增這段，讓 group 撐滿寬度 */
+    .group {
+        width: 100%;
     }
 
     /* 2. 讓卡片乖乖縮回原本的大小，取消平移與放大 */
     .card {
         transform: none; /* 取消所有的 scale 和 translateX */
-        margin-top: 20px;
+        margin-top: 5px;
         width: 100%;
         max-width: 100%; /* 在手機上讓卡片撐滿可用空間 */
     }
 
     /* 3. 解除狐狸影片的重疊設定與平移 */
     .fox-gif {
+        display: none; /* 手機版不顯示狐狸圖片 */
         margin-left: 0;  /* 取消負邊距，不重疊了 */
         transform: none; /* 取消平移 */
         width: 100%;
