@@ -1,21 +1,25 @@
 {
-  "name": "我的App名稱",
-  "short_name": "簡短名稱",
+  "name": "英語朗讀練習",
+  "short_name": "朗讀練習",
+  "description": "英語朗讀流暢度練習與 AI 評分回饋系統",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
+  "orientation": "portrait-primary",
   "background_color": "#ffffff",
-  "theme_color": "#000000",
-  "orientation": "portrait",
+  "theme_color": "#e63946",
   "icons": [
     {
-      "src": "/icons/icon-192.png",
+      "src": "/static/icons/icon-192.png",
       "sizes": "192x192",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any maskable"
     },
     {
-      "src": "/icons/icon-512.png",
+      "src": "/static/icons/icon-512.png",
       "sizes": "512x512",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any maskable"
     }
   ]
 }

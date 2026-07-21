@@ -813,12 +813,28 @@ nPVI (正規化成對變異指數) 衡量朗讀節奏的規律性，Varco 衡量
 
 
 # --- 3. 基礎路由 (頁面跳轉) ---
+@app.route('/manifest.json')
+def manifest():
+    """💡 PWA 設定檔，一定要放在網站根目錄（不是 /static/）瀏覽器才會自動抓到。"""
+    return send_from_directory('.', 'manifest.json', mimetype='application/manifest+json')
+
+@app.route('/service-worker.js')
+def service_worker():
+    """💡 Service Worker 也一定要放在網站根目錄，它的「控制範圍」是根據檔案所在路徑決定的，
+       如果放在 /static/ 底下，就只能控制 /static/ 路徑，沒辦法讓整個網站可以離線使用/被安裝。"""
+    return send_from_directory('.', 'service-worker.js', mimetype='application/javascript')
+
 @app.route('/')
 def index():
     return render_template('index.html')
 
 @app.route('/main')
 def main_page():
+    # 💡 新增：沒有登入(session 裡沒有 username)就導回登入頁，
+    #    不然不管是直接打網址、還是從 PWA 圖示打開，都能看到 main.html，
+    #    只是裡面因為抓不到使用者資料而看起來像壞掉，體驗很差。
+    if not session.get('username'):
+        return redirect(url_for('index'))
     return render_template('main.html')
 
 @app.route('/navbar')
@@ -1034,7 +1050,7 @@ def upload_audio():
             wer_data_payload = {'original_text': original_text}
 
             wer_url = "http://backend-wer:8000/api/analyze-reading"
-            wer_response = requests.post(wer_url, files=wer_files, data=wer_data_payload, timeout=240)
+            wer_response = requests.post(wer_url, files=wer_files, data=wer_data_payload, timeout=120)
 
             if wer_response.status_code == 200:
                 full_wer_raw_json = wer_response.json()

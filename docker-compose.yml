@@ -11,16 +11,33 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
-    # 2. 全新的 Python 自動化分析後端
+  # 💡 修正：caddy 之前被寫進 web 底下變成子項目了，要跟 web 同一層縮排，
+  #    才是一個獨立的 service，不然 docker compose 會解析錯誤或直接忽略這個設定。
+  caddy:
+    image: caddy:2-alpine
+    container_name: caddy
+    restart: always
+    ports:
+      - "443:443"   # 其他裝置連線用這個 port，走 HTTPS
+      - "80:80"      # 保留 80，Caddy 預設會自動把 http 導向 https
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data       # 存放自動產生的自簽憑證，容器重啟不用重新產生
+      - caddy_config:/config
+    depends_on:
+      - web
+      - phpmyadmin
+
+  # 2. 全新的 Python 自動化分析後端
   backend-wer:
     build: ./backend-wer
     ports:
       - "8001:8000"
     volumes:
       - ./models:/root/.cache/whisper
-      - ./torch_cache:/root/.cache/torch 
+      - ./torch_cache:/root/.cache/torch
 
-  backend-npvi:   
+  backend-npvi:
     image: speech-api:v2  # 🚀【核心更換】：換成組員給的新網站映像檔名字
     container_name: backend-npvi-1
     restart: always
@@ -33,23 +50,26 @@ services:
       - ${RECORDINGS_PATH:-./kids_recordings}:/app/data:rw
 
   mysql:
-      image: mysql:8.0
-      environment:
-        MYSQL_ROOT_PASSWORD: yourpassword
-        MYSQL_DATABASE: project115
-      ports:
-        - "3306:3306"
-      volumes:
-        - mysql_data:/var/lib/mysql
-        
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: yourpassword
+      MYSQL_DATABASE: project115
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+
   phpmyadmin:
-      image: phpmyadmin/phpmyadmin
-      ports:
-        - "8080:80"
-      environment:
-        PMA_HOST: mysql
-        PMA_USER: root
-        PMA_PASSWORD: yourpassword
+    image: phpmyadmin/phpmyadmin
+    ports:
+      - "8080:80"   # 💡 保留這行也沒關係：你自己在本機還是可以用 localhost:8080 直接連，跟 Caddy 那條路並存不衝突
+    environment:
+      PMA_HOST: mysql
+      PMA_USER: root
+      PMA_PASSWORD: yourpassword
+      # 💡 新增：讓 phpMyAdmin 知道自己實際是被架在 /phpmyadmin/ 這個路徑底下，
+      #    它產生的連結、表單提交網址才會正確帶上這個前綴，不然透過 Caddy 反代之後點什麼都會壞掉。
+      PMA_ABSOLUTE_URI: https://poyu39.tw/phpmyadmin/
 
   ollama:
     image: ollama/ollama:latest
@@ -72,3 +92,5 @@ volumes:
   mysql_data:
   shared-data:
   ollama_data:
+  caddy_data:
+  caddy_config:

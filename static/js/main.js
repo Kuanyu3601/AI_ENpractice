@@ -1,3 +1,20 @@
+// ══════════════════════════════════════════════════
+//  📱 PWA：註冊 Service Worker
+// ══════════════════════════════════════════════════
+// 💡 這是瀏覽器判斷「這個網站可以被安裝成 App」的必要條件之一。
+//    ⚠️ 有個重要限制：Service Worker 只能在「安全情境」下註冊成功——
+//    也就是網址是 https:// 開頭，或者是 http://localhost / http://127.0.0.1。
+//    如果你是透過學校網路的內網 IP（例如 http://192.168.x.x:5001）用 http 連線，
+//    瀏覽器會直接拒絕註冊 Service Worker（這不是程式錯誤，是瀏覽器的安全機制），
+//    這種情況下 PWA 沒辦法完整安裝，manifest.json 本身還是讀得到，但不會出現安裝按鈕。
+if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/service-worker.js')
+            .then((reg) => console.log('✅ Service Worker 註冊成功:', reg.scope))
+            .catch((err) => console.warn('⚠️ Service Worker 註冊失敗（如果是 http+非localhost 連線，這是正常現象）:', err.message));
+    });
+}
+
 window.switchWerFilter = function(btn, errorType, stripId) {
     const strip = document.getElementById(stripId);
     if (!strip) return;
