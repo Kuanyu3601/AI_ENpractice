@@ -9,9 +9,49 @@ from werkzeug.security import generate_password_hash, check_password_hash
 import random
 import re
 import shutil
+import threading
+import time
 
 app = Flask(__name__)
 app.secret_key = 'any_secret_string_here'
+
+# ══════════════════════════════════════════════════
+#  ⏳ 上傳進度即時回報機制
+# ══════════════════════════════════════════════════
+# 💡 因為 upload_audio() 這支 API 本身要跑很久（WER辨識→NPVI分析→好幾個Ollama評分/評語呼叫），
+#    單一個 request/response 沒辦法讓前端知道「現在到底跑到哪裡」。
+#    這裡用一個簡單的記憶體字典存放「每個上傳工作目前的進度文字」，
+#    upload_audio() 執行的過程中會不斷更新這個字典，
+#    前端另外開一個輕量的 /upload_progress/<progress_id> API 每秒輪詢一次，
+#    藉此顯示「真正反映後端目前在做什麼」的進度文字，而不是寫死的假動畫。
+_upload_progress_store = {}
+_upload_progress_lock = threading.Lock()
+_UPLOAD_PROGRESS_TTL_SEC = 600  # 進度紀錄超過這個時間沒被清掉就視為過期，避免字典無限增長
+
+def set_upload_progress(progress_id, text):
+    if not progress_id:
+        return
+    with _upload_progress_lock:
+        _upload_progress_store[progress_id] = {"text": text, "ts": time.time()}
+
+def get_upload_progress(progress_id):
+    with _upload_progress_lock:
+        entry = _upload_progress_store.get(progress_id)
+        return entry["text"] if entry else ""
+
+def clear_upload_progress(progress_id):
+    if not progress_id:
+        return
+    with _upload_progress_lock:
+        _upload_progress_store.pop(progress_id, None)
+
+def _cleanup_stale_progress():
+    """💡 順手清掉太舊、前端可能忘記輪詢完就離開頁面的殘留紀錄，避免字典無限增長。"""
+    now = time.time()
+    with _upload_progress_lock:
+        stale_keys = [k for k, v in _upload_progress_store.items() if now - v.get("ts", 0) > _UPLOAD_PROGRESS_TTL_SEC]
+        for k in stale_keys:
+            _upload_progress_store.pop(k, None)
 
 # --- 1. 資料夾與檔案配置 ---
 UPLOAD_FOLDER = 'kids_recordings'
@@ -883,23 +923,41 @@ def login():
             conn.close()
 
 # --- 5. 錄音存儲與回放邏輯 ---
+@app.route('/upload_progress/<progress_id>', methods=['GET'])
+def upload_progress(progress_id):
+    """💡 前端上傳期間，每隔約 1 秒呼叫這支輕量 API 一次，拿到後端目前真正的處理階段文字。"""
+    _cleanup_stale_progress()
+    stage_text = get_upload_progress(progress_id)
+    resp = jsonify({"status": "success", "stage": stage_text})
+    # 💡 明確禁止快取，避免瀏覽器把第一次的回應快取住，導致之後的輪詢都拿到同一份舊資料
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    resp.headers['Pragma'] = 'no-cache'
+    return resp
+
+
 @app.route('/upload_audio', methods=['POST'])
 def upload_audio():
     project_id = request.form.get('project_id')
     mode = request.form.get('mode', 'segment')
     para_idx = request.form.get('paragraph_index')
+    progress_id = request.form.get('progress_id')  # 💡 前端產生的一次性 ID，用來對應這次上傳的進度紀錄
+
+    set_upload_progress(progress_id, '正在上傳錄音檔案...')
 
     try:
         para_idx = int(para_idx)
     except:
+        clear_upload_progress(progress_id)
         return jsonify({"status": "error", "message": "段落編號錯誤"})
 
     audio_file = request.files.get('audio_data')
     if not audio_file:
+        clear_upload_progress(progress_id)
         return jsonify({"status": "error", "message": "後端沒有收到任何錄音音檔 (audio_data 為空)"})
 
     conn = get_db_connection()
     if conn is None:
+        clear_upload_progress(progress_id)
         return jsonify({"status": "error", "message": "後端連不上 MySQL 資料庫，請檢查資料庫設定"})
 
     cursor = conn.cursor()
@@ -971,11 +1029,12 @@ def upload_audio():
         score_grammar = 0.0
 
         try:
+            set_upload_progress(progress_id, '正在進行語音辨識與詞錯誤率分析...')
             wer_files = {'audio_file': (filename, audio_bytes, 'audio/wav')}
             wer_data_payload = {'original_text': original_text}
 
             wer_url = "http://backend-wer:8000/api/analyze-reading"
-            wer_response = requests.post(wer_url, files=wer_files, data=wer_data_payload, timeout=120)
+            wer_response = requests.post(wer_url, files=wer_files, data=wer_data_payload, timeout=240)
 
             if wer_response.status_code == 200:
                 full_wer_raw_json = wer_response.json()
@@ -1011,6 +1070,7 @@ def upload_audio():
 
                     npvi_url = "http://backend-npvi:8000/api/analyze"
                     print(f"📡 [發送網路請求] 正在呼叫 {npvi_url} ...", flush=True)
+                    set_upload_progress(progress_id, '正在分析節奏與語速 (nPVI / Varco)...')
 
                     npvi_response = requests.post(npvi_url, files=npvi_files, data=npvi_data, timeout=90)
                     print(f"📥 [同學網路回應狀態碼]: {npvi_response.status_code}", flush=True)
@@ -1020,6 +1080,7 @@ def upload_audio():
                         full_npvi_raw_json = speech_data
 
                         actual_data = speech_data.get("data", {})
+                        set_upload_progress(progress_id, '正在下載逐字時間戳並進行自動對齊...')
 
                         textgrid_filename = actual_data.get("file", "output.TextGrid")
                         chunks_list = actual_data.get("chunk_results") or []
@@ -1100,11 +1161,13 @@ def upload_audio():
             else:
                 cursor.close()
                 conn.close()
+                clear_upload_progress(progress_id)
                 return jsonify({"status": "error", "message": f"backend-wer 容器回應狀態碼錯誤: {wer_response.status_code}"})
 
         except Exception as err:
             cursor.close()
             conn.close()
+            clear_upload_progress(progress_id)
             return jsonify({"status": "error", "message": f"Pipeline 連線調度鏈發生死鎖崩潰: {str(err)}"})
 
         npvi_score = round(float(npvi_score), 2)
@@ -1115,6 +1178,7 @@ def upload_audio():
         # 🚀 【核心新增】：呼叫 Ollama 評分——
         #    完整度/準確度/流利度：用 wer_stats 的錯誤統計數字 + 停頓次數
         #    語法正確性：直接把 Whisper 辨識出的文字丟給 Ollama 判斷
+        set_upload_progress(progress_id, 'AI 正在評估發音完整度、準確度與流利度分數...')
         try:
             ollama_error_scores = call_ollama_score_errors(wer_stats, pause_count)
             score_completeness = ollama_error_scores.get("completeness", 0.0)
@@ -1124,6 +1188,7 @@ def upload_audio():
         except Exception as ollama_err:
             print(f"🚨 呼叫 Ollama 錯誤統計評分整體失敗: {ollama_err}", flush=True)
 
+        set_upload_progress(progress_id, 'AI 正在評估語法正確性...')
         try:
             score_grammar = call_ollama_score_grammar(whisper_processed_text)
             print(f"✅ Ollama 語法評分完成: {score_grammar}", flush=True)
@@ -1133,6 +1198,7 @@ def upload_audio():
         # 💡 每一段錄音都計算「這一段自己」的流暢度評分 (0-100)，存進 recordings.fluency_score_100，
         #    不管分段還是整篇模式都會算，純粹代表這一段錄音自己的 nPVI/Varco 表現。
         recording_fluency_score_100 = 0.0
+        set_upload_progress(progress_id, 'AI 正在計算整體流暢度分數...')
         try:
             recording_fluency_score_100 = call_ollama_score_overall_fluency(npvi_score, varco_score)
             print(f"✅ Ollama 單段流暢度評分完成: {recording_fluency_score_100}", flush=True)
@@ -1145,6 +1211,7 @@ def upload_audio():
         #    一段是 nPVI/Varco 節奏語速的流暢度回饋，逐句的即時提示不會呼叫 Ollama
         #   （前端用固定範本秒開），這裡是給使用者事後查看整體報告時看的、比較有深度的整體評語。
         fluency_feedback_text = ""
+        set_upload_progress(progress_id, 'AI 正在生成節奏流暢度建議...')
         try:
             fluency_feedback_text = call_ollama_fluency_feedback(sentence_fluency)
             print(f"✅ Ollama 流暢度回饋完成: {fluency_feedback_text}", flush=True)
@@ -1156,16 +1223,19 @@ def upload_audio():
         completeness_feedback_text = ""
         accuracy_feedback_text = ""
         wer_fluency_feedback_text = ""
+        set_upload_progress(progress_id, 'AI 正在生成完整度回饋建議...')
         try:
             completeness_feedback_text = call_ollama_wer_category_feedback('completeness', wer_stats)
             print(f"✅ Ollama 完整度分項回饋完成: {completeness_feedback_text}", flush=True)
         except Exception as ollama_err:
             print(f"🚨 呼叫 Ollama 完整度分項回饋失敗: {ollama_err}", flush=True)
+        set_upload_progress(progress_id, 'AI 正在生成準確度回饋建議...')
         try:
             accuracy_feedback_text = call_ollama_wer_category_feedback('accuracy', wer_stats)
             print(f"✅ Ollama 準確度分項回饋完成: {accuracy_feedback_text}", flush=True)
         except Exception as ollama_err:
             print(f"🚨 呼叫 Ollama 準確度分項回饋失敗: {ollama_err}", flush=True)
+        set_upload_progress(progress_id, 'AI 正在生成流利度回饋建議...')
         try:
             wer_fluency_feedback_text = call_ollama_wer_category_feedback('fluency', wer_stats)
             print(f"✅ Ollama 流利度分項回饋完成: {wer_fluency_feedback_text}", flush=True)
@@ -1214,6 +1284,7 @@ def upload_audio():
         alignment_json = json.dumps(extended_report, ensure_ascii=False)
 
         db_path = f"/get_audio/{username}/{filename}"
+        set_upload_progress(progress_id, '正在儲存結果到資料庫...')
         try:
             insert_sql = """
                INSERT INTO recordings (project_id, paragraph_index, file_path, wer, total_words, error_count,
@@ -1248,6 +1319,7 @@ def upload_audio():
         cursor.close()
         conn.close()
 
+        clear_upload_progress(progress_id)
         return jsonify({
             "status": "success",
             "url": db_path,
@@ -1283,6 +1355,7 @@ def upload_audio():
     except Exception as global_err:
         if 'cursor' in locals() and cursor: cursor.close()
         if 'conn' in locals() and conn: conn.close()
+        clear_upload_progress(progress_id)
         return jsonify({"status": "error", "message": f"後端 upload_audio 發生未預期崩潰: {str(global_err)}"})
 
 @app.route('/get_word_pronunciation_tip', methods=['POST'])
@@ -1682,4 +1755,4 @@ def update_user_info():
     return jsonify({"status": "success"})
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=True, threaded=True)

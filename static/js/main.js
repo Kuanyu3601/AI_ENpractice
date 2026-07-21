@@ -1375,6 +1375,62 @@ function updateRecordBtnUI() {
 }
 
 /** 按下確認上傳鍵：如果還在錄音，幫他自動封裝收尾並傳送 */
+// ══════════════════════════════════════════════════
+//  ⏳ 上傳分析進度提示（真實輪詢後端目前的處理階段，不是寫死的假動畫）
+// ══════════════════════════════════════════════════
+/**
+ * 💡 upload_audio() 這支 API 要跑很久（語音辨識→節奏分析→好幾個 AI 評分/建議生成），
+ *    這裡用一個轉圈圈 + 文字的提示框，文字內容是**每隔約 1 秒去問後端**
+ *    「這個上傳工作(progress_id)目前真正跑到哪個階段」得到的真實回應，
+ *    不是前端自己猜的固定動畫。
+ */
+function showUploadProgress(progressId) {
+    let overlay = document.getElementById('uploadProgressOverlay');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'uploadProgressOverlay';
+        overlay.style.cssText = 'margin-top:12px; padding:14px 18px; background:#eff6ff; border:1px solid #bfdbfe; border-radius:10px; display:flex; align-items:center; gap:10px;';
+        overlay.innerHTML = `
+            <div style="width:18px; height:18px; border:3px solid #bfdbfe; border-top-color:#2563eb; border-radius:50%; animation: uploadSpin 0.8s linear infinite; flex-shrink:0;"></div>
+            <span id="uploadProgressText" style="font-size:0.85rem; color:#1e40af; font-weight:bold;">正在上傳錄音...</span>
+        `;
+        if (!document.getElementById('uploadProgressStyle')) {
+            const styleTag = document.createElement('style');
+            styleTag.id = 'uploadProgressStyle';
+            styleTag.textContent = `@keyframes uploadSpin { to { transform: rotate(360deg); } }`;
+            document.head.appendChild(styleTag);
+        }
+        const uploadBtnEl = document.getElementById('uploadAudioBtn');
+        if (uploadBtnEl && uploadBtnEl.parentNode) {
+            uploadBtnEl.parentNode.insertBefore(overlay, uploadBtnEl.nextSibling);
+        } else {
+            document.body.appendChild(overlay);
+        }
+    }
+    overlay.style.display = 'flex';
+
+    // 💡 每隔約 1 秒問後端一次「這個 progress_id 現在真正跑到哪」，拿到什麼就顯示什麼
+    clearInterval(window._uploadProgressTimer);
+    window._uploadProgressTimer = setInterval(async () => {
+        try {
+            const resp = await fetch(`/upload_progress/${progressId}?t=${Date.now()}`, { cache: 'no-store' });
+            const data = await resp.json();
+            if (data.status === 'success' && data.stage) {
+                const textEl = document.getElementById('uploadProgressText');
+                if (textEl) textEl.textContent = data.stage;
+            }
+        } catch (e) {
+            // 輪詢失敗就靜默略過，不要因為這個把整個上傳流程打斷
+        }
+    }, 1000);
+}
+
+function hideUploadProgress() {
+    clearInterval(window._uploadProgressTimer);
+    const overlay = document.getElementById('uploadProgressOverlay');
+    if (overlay) overlay.style.display = 'none';
+}
+
 async function uploadAudio() {
     if (state.recordState === 'recording' && state.mediaRecorder && state.mediaRecorder.state !== 'inactive') {
         const finalizePromise = new Promise(resolve => {
@@ -1411,6 +1467,8 @@ async function uploadAudio() {
         const currentPara = (mode === 'whole') ? 0 : (state.currentParagraph + 1);
 
         // --- 📥 動作 A：維持你原本的送出存檔 (只傳給你的 5000 後端，8000 port 交給後端打電話就行！) ---
+        const progressId = `p_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`; // 💡 這次上傳的一次性識別碼，供輪詢真實進度用
+
         const formDataMyBackend = new FormData();
         formDataMyBackend.append("audio_data", wavBlob);
         formDataMyBackend.append("project_id", projectId);
@@ -1418,7 +1476,10 @@ async function uploadAudio() {
         formDataMyBackend.append("article_name", articleName);
         formDataMyBackend.append("paragraph_index", currentPara);
         formDataMyBackend.append("mode", mode);
+        formDataMyBackend.append("progress_id", progressId);
         console.log(`正在上傳... 模式: ${mode}, 段落索引: ${currentPara}`);
+
+        showUploadProgress(progressId);
 
         console.log("正在送出音檔至 Flask 後端處理...");
         const response = await fetch('/upload_audio', { method: 'POST', body: formDataMyBackend });
@@ -1494,6 +1555,7 @@ async function uploadAudio() {
         showToast("上傳失敗: " + error.message);
     } finally {
         if (btn) { btn.disabled = false; btn.textContent = '✓ 上傳並繼續'; }
+        hideUploadProgress();
     }
 }
 
@@ -4572,7 +4634,7 @@ function renderMultipleParagraphsReport(paragraphList, globalStats, mode = 'segm
             retryWrap.style.cssText = 'width:100%; display:flex; justify-content:center; margin-top:20px; padding-top:16px; border-top:1px solid #e2e8f0;';
             retryWrap.innerHTML = `
                 <button type="button" onclick="createNewProject('retry')" style="display:flex; align-items:center; gap:8px; padding:10px 24px; border:none; background:#2563eb; color:#fff; border-radius:24px; font-weight:bold; font-size:0.9rem; cursor:pointer; box-shadow:0 2px 8px rgba(37,99,235,0.3);">
-                    <span style="font-size:1.1rem;">🔄</span> 反覆練習
+                    <span style="font-size:1.1rem;">🔄</span> 反覆練習這篇文章
                 </button>
             `;
             container.appendChild(retryWrap);
