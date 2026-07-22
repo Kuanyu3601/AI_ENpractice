@@ -1,11 +1,19 @@
 <!-- ── Navbar ── -->
 <nav>
-    <a class="logo" href="#">
-        <div class="logo-icon">
-        <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zm0 7L2 14l10 5 10-5-10-5z"/></svg>
-        </div>
-        <span class="logo-text">English</span>
-        
-    </a>
+
+    <div class="nav-left">
+        <button class="nav-history-btn" id="navHistoryBtn" type="button"
+                aria-label="練習紀錄"
+                onclick="if (typeof toggleSidebar === 'function') toggleSidebar()">
+            <span aria-hidden="true">☰</span>
+        </button>
+
+        <a class="logo" href="#">
+            <div class="logo-icon">
+                <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zm0 7L2 14l10 5 10-5-10-5z"/></svg>
+            </div>
+            <span class="logo-text">English</span>
+        </a>
+    </div>
     <img class="user-btn" id="userBtn" src="../static/image/home-user.svg" alt="icon_user">
 </nav>

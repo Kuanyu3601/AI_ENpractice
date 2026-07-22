@@ -10,6 +10,7 @@
 
 body, html {
     height: 100vh;
+    height: 100dvh;
     margin: 0;
     padding: 0;
     display: flex;
@@ -40,7 +41,7 @@ body, html {
     border: 0px solid rgba(60,120,200,0.13);
     border-bottom: none;
     overflow: hidden;
-    margin-bottom: 10px;
+    margin-bottom: 0px;
 }
 
 .sidebar-header {
@@ -250,6 +251,71 @@ body, html {
     background: #dde8fb;
 }
 
+/* ── plus-dropdown 按鈕的 hover 提示 ── */
+
+/* 讓 header 整層蓋在下方清單之上，避免提示被 history-list 壓住 */
+.sidebar-header {
+    position: relative;
+    z-index: 5;
+}
+
+.plus-dropdown button {
+    position: relative;   /* 提示以按鈕為定位基準 */
+}
+
+/* 氣泡本體 */
+.plus-dropdown button[data-tip]::after {
+    content: attr(data-tip);
+    position: absolute;
+    top: calc(100% + 9px);   /* 往下開，避開側欄上緣 */
+    right: 0;                /* 靠右對齊，往左長，避開側欄右緣 */
+
+    padding: 5px 10px;
+    background: rgba(43, 58, 85, 0.94);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 1.4;
+    letter-spacing: normal;
+    white-space: nowrap;
+    border-radius: 6px;
+    box-shadow: 0 3px 10px rgba(60, 120, 200, 0.25);
+
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 0.15s ease, visibility 0.15s;
+    z-index: 100;
+}
+
+/* 小箭頭 */
+.plus-dropdown button[data-tip]::before {
+    content: "";
+    position: absolute;
+    top: calc(100% + 3px);
+    right: 8px;              /* 對準按鈕中心附近 */
+    border: 6px solid transparent;
+    border-bottom-color: rgba(43, 58, 85, 0.94);
+
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 0.15s ease, visibility 0.15s;
+    z-index: 100;
+}
+
+/* 觸發條件：只在有滑鼠的裝置上，避免手機點一下就卡住 */
+@media (hover: hover) {
+    .plus-dropdown button[data-tip]:hover::after,
+    .plus-dropdown button[data-tip]:hover::before,
+    .plus-dropdown button[data-tip]:focus-visible::after,
+    .plus-dropdown button[data-tip]:focus-visible::before {
+        opacity: 1;
+        visibility: visible;
+        transition-delay: 0.35s;   /* 停留 0.35 秒才出現，滑過不會亂閃 */
+    }
+}
+
 /* 💡 加號按鈕 */
 .btn-plus {
     cursor: pointer;
@@ -266,6 +332,8 @@ body, html {
 
 
 
+
+
 /* ══════════════════════════════════════════════════
    MAIN CHAT AREA
    ══════════════════════════════════════════════════ */
@@ -279,7 +347,7 @@ body, html {
     border: 0px solid rgba(60,120,200,0.11);
     border-bottom: none;
     box-shadow: 0 4px 24px rgba(40,80,160,0.06);
-    margin-bottom: 10px;
+    margin-bottom: 0px;
 }
 
 /* Chat Header */
@@ -342,8 +410,9 @@ body, html {
 .step-nav {
     display: flex;
     align-items: center;
+    justify-content: center;
     padding: 14px 28px;
-    gap: 12px;
+    gap: 35px;
     border-bottom: 1px solid rgba(60,120,200,0.09);
     flex-shrink: 0;
     background: linear-gradient(to bottom, #fafcff, #f5f8ff);
@@ -380,7 +449,7 @@ body, html {
 }
 
 .step-indicators {
-    flex: 1;
+    flex: 0 1 auto;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1187,7 +1256,66 @@ body, html {
 .sf-btn-icon { font-size: 1.2rem; line-height: 1; }
 .sf-btn-label { font-size: 0.62rem; }
 
+/* ── 朗讀／遮擋按鈕的 hover 提示 ── */
 
+.sf-btn {
+    position: relative;   /* 提示以按鈕為定位基準 */
+}
+
+/* 氣泡本體 */
+.sf-btn[data-tip]::after {
+    content: attr(data-tip);
+    position: absolute;
+    left: calc(100% + 10px);   /* 👈 往右開，不會被左側邊界切掉 */
+    top: 50%;
+    transform: translateY(-50%);
+
+    padding: 5px 10px;
+    background: rgba(43, 58, 85, 0.94);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 1.4;
+    letter-spacing: normal;
+    white-space: nowrap;
+    border-radius: 6px;
+    box-shadow: 0 3px 10px rgba(60, 120, 200, 0.25);
+
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 0.15s ease, visibility 0.15s;
+    z-index: 100;
+}
+
+/* 小箭頭（朝左） */
+.sf-btn[data-tip]::before {
+    content: "";
+    position: absolute;
+    left: calc(100% + 4px);
+    top: 50%;
+    transform: translateY(-50%);
+    border: 6px solid transparent;
+    border-right-color: rgba(43, 58, 85, 0.94);
+
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 0.15s ease, visibility 0.15s;
+    z-index: 100;
+}
+
+/* 👇 這段就是你漏掉的：沒有它，上面兩塊永遠 opacity: 0 */
+@media (hover: hover) {
+    .sf-btn[data-tip]:hover::after,
+    .sf-btn[data-tip]:hover::before,
+    .sf-btn[data-tip]:focus-visible::after,
+    .sf-btn[data-tip]:focus-visible::before {
+        opacity: 1;
+        visibility: visible;
+        transition-delay: 0.35s;
+    }
+}
 
 
 
@@ -1198,6 +1326,8 @@ body, html {
     align-items: center;
     flex-shrink: 0;
     padding-top: 0px;          /* 對齊 lyrics-view 頂部 padding */
+    position: relative;   /* 👈 新增 */
+    z-index: 10;
 }
 
 
@@ -1439,8 +1569,10 @@ body, html {
 }
 
 .record-btn-row {
-    display: flex;
-    justify-content: center;
+    display: flex; 
+    gap: 12px; 
+    justify-content: center; 
+    align-items: center;
 }
 
 .record-btn {
@@ -1630,7 +1762,7 @@ body, html {
     display: flex;
     justify-content: center;
     margin-top: 24px;
-    margin-bottom: 24px;
+    padding-bottom: 24px;
     padding-top: 20px;
     border-top: 1px solid #eee;   /* 跟上方評分內容做個分隔，不要就拿掉 */
 }
@@ -1899,7 +2031,7 @@ body, html {
     }
 
     .step-panel {
-        padding: 18px 16px;
+        padding: 8px 12px;
     }
 
     .article-grid {
@@ -1918,13 +2050,7 @@ body, html {
 /* 💡 新增：視窗高度較小時（例如筆電、或手動縮小瀏覽器高度），
    讓字幕區與錄音控制區的縮放上下限也一併收緊，避免內容被截斷或出現不必要的內部捲軸 */
 @media (max-height: 700px) {
-    .lyrics-wrapper {
-        height: clamp(160px, 30vh, 260px);
-        min-height: 140px;
-    }
-    .record-controls {
-        max-height: clamp(150px, 24vh, 220px);
-    }
+    
     .chat-header { height: 50px; }
     .step-nav { padding: 6px 20px; }
     .step-panel { padding-top: 18px; padding-bottom: 18px; }
@@ -1990,6 +2116,40 @@ body, html {
     box-sizing: border-box !important;
 
 
+}
+
+/* ── 提示圖片區的 hover 提示 ── */
+.mask-image-area[data-tip]::after {
+    content: attr(data-tip);
+    position: absolute;
+    top: 14px;                    /* 浮在區塊內部上緣 */
+    left: 50%;
+    transform: translateX(-50%);
+
+    padding: 6px 14px;
+    background: rgba(43, 58, 85, 0.9);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 1.4;
+    letter-spacing: normal;
+    white-space: nowrap;
+    border-radius: 100px;         /* 藥丸型，浮在圖片上比較不突兀 */
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.18);
+
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;         /* 👈 必要：別擋住翻牌的點擊 */
+    transition: opacity 0.15s ease, visibility 0.15s;
+    z-index: 20;
+}
+
+@media (hover: hover) {
+    .mask-image-area[data-tip]:hover::after {
+        opacity: 1;
+        visibility: visible;
+        transition-delay: 0.35s;
+    }
 }
 
 /* 💡 修正每個圖片外框的縮放權重 */
@@ -2096,12 +2256,44 @@ body, html {
 
 /* ── 手機版：朗讀／遮擋按鈕改到文章上方 ── */
 @media (max-width: 768px) {
+
+    
+
+    .chat-header { height: calc(var(--u) * 4.5); }
+
+    .step-nav    { padding: calc(var(--u) * 0.5) 14px; }
+    .step-arrow  { width: calc(var(--u) * 3);    height: calc(var(--u) * 3); }
+    .step-circle { width: calc(var(--u) * 3.25); height: calc(var(--u) * 3.25);
+                   font-size: calc(var(--u) * 0.9); }
+    .step-line   { max-width: 24px; }
+
+    .mobile-controls-row { padding: 0 12px; }
+    .para-sidebar { padding: calc(var(--u) * 0.25) 12px; }
+    .para-pip     { width: calc(var(--u) * 3); height: calc(var(--u) * 3);
+                    font-size: calc(var(--u) * 0.82); }
+    .sf-btn       { padding: calc(var(--u) * 0.5) var(--u); }
+    .sf-btn-icon  { font-size: calc(var(--u) * 1.25); }
+
+    .step-panel     { padding: var(--u) calc(var(--u) * 1.5); }
+    .record-content { padding-bottom: calc(var(--u) * 0.25); }
+    .timer-display  { font-size: calc(var(--u) * 2.1); }
+
     /* 朗讀／遮擋按鈕移到文章上方 + 側欄改為浮動覆蓋樣式 */
-.lyrics-wrapper {
-        flex-direction: column;   /* 原本是 row，手機改成上下排列 */
-        height: clamp(280px, 46vh, 440px);   /* 💡 字幕區加大：按鈕搬到上方跟段落列同排後，這裡騰出更多空間 */
-        min-height: 220px;
+    .lyrics-wrapper {
+        flex-direction: column;
+        height: auto;
+        flex: 1 1 0;
+        min-height: 180px;
     }
+
+    .record-controls {
+        flex: 0 0 auto;    /* 👈 grow 和 shrink 都是 0：就是內容高度，不多不少 */
+        max-height: none;
+        min-height: 0;
+        padding-top: 10px;
+        gap: 8px;
+    }
+    .timer-display { font-size: 1.15rem; }
  
     /* 💡 手機版：朗讀/遮擋按鈕改跟段落按鈕擠在同一排（由 JS 搬到 #mobileControlsRow），不再自己佔一整排 */
     .select-function {
@@ -2173,20 +2365,20 @@ body, html {
         max-width: 100%;
     }
 
-    /* 側欄開合按鈕：手機版固定移到 navbar 左上角，兩顆統一大小方便對齊 */
-    .sidebar-show-btn,
-    .sidebar-toggle-btn {
-        position: fixed !important;
-        top: 19px;      /* 對齊 navbar 70px 高度的垂直置中位置 */
-        left: 12px;
-        width: 32px !important;
-        height: 32px !important;
-        z-index: 500;   /* 高於 navbar 的 z-index:10，確保浮在上面 */
+    /* 展開側欄改由 navbar 的 .nav-history-btn 負責 */
+    .sidebar-show-btn {
+        display: none !important;
     }
 
-    /* 側欄標題「練習紀錄」讓出左邊空間，避免跟固定按鈕重疊 */
+    /* 收合鍵回到側欄標題列內，不再固定浮在畫面上 */
+    .sidebar-toggle-btn {
+        position: static !important;
+        width: calc(var(--u) * 3) !important;
+        height: calc(var(--u) * 3) !important;
+    }
+
     .sidebar-header {
-        padding-left: 54px;
+        padding-left: 18px;   /* 👈 原本 54px，不用再閃避浮動按鈕 */
     }
 
     /* ── 分段練習：段落選擇按鈕跟朗讀/遮擋按鈕合併成同一排 ── */
@@ -2243,7 +2435,8 @@ body, html {
     }
  
     .record-section.whole-mode .lyrics-wrapper {
-        height: clamp(300px, 52vh, 460px);   /* 沒有段落列佔用高度，字幕區可以更大（比分段練習再大一些） */
+        height: auto;
+        flex: 6 1 0;   /* 沒有段落列，字幕可以再大一點 */
     }
 
    
@@ -2266,7 +2459,7 @@ body, html {
         align-items: center !important;
         justify-content: flex-start !important;
         gap: 14px !important;
-        padding: 8px !important;   /* 縮小內距讓圖片有更多寬度可用 */
+        padding: 8px 12px !important;  
         overflow-y: auto;   /* 直向堆疊可能超出可視高度，允許滾動查看 */
         scroll-behavior: smooth;      /* 💡 跟字幕區 .lyrics-view 一樣的滑動手感 */
         scrollbar-width: none;        /* 隱藏捲軸，但還是可以滑動 */
@@ -2291,7 +2484,6 @@ body, html {
     .mask-img-slot {
         width: clamp(220px, 78vw, 380px) !important;
         /* 💡 核心：用 vw 當單位，螢幕越寬圖片越大、螢幕越窄圖片越小；aspect-ratio 鎖住正方形，高度自動等比跟著寬度變化，不會被拉扁或拉長 */
-        max-width: 96% !important;   /* 保留一點左右邊距，避免貼邊 */
         height: auto !important;
         aspect-ratio: 1 / 1 !important;
         flex: 0 0 auto !important; /* 不要平分高度，改成依內容各自堆疊 */
@@ -2307,6 +2499,24 @@ body, html {
         font-size: 1.6rem !important;
         line-height: 1.45 !important;
     }
+
+    .step-nav {
+    display: flex;
+    align-items: center;
+    padding: 14px 28px;
+    gap: 12px;
+    border-bottom: 1px solid rgba(60,120,200,0.09);
+    flex-shrink: 0;
+    background: linear-gradient(to bottom, #fafcff, #f5f8ff);
+}
+
+    .step-indicators {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+}
 }
 
 /* ── 更窄的手機（例如 iPhone SE 等 <=480px）：把可放大的比例再拉高一些，

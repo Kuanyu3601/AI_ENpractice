@@ -116,8 +116,8 @@
                 <h3>練習紀錄</h3>
             </div>
             <div class="plus-dropdown">
-                    <button onclick="createNewProject('new')">+</button>
-                    <button id="retryCurrentBtn" onclick="createNewProject('retry')">🔄</button>
+                    <button onclick="createNewProject('new')" data-tip="新增文章">+</button>
+                    <button id="retryCurrentBtn" onclick="createNewProject('retry')" data-tip="重新練習這篇">🔄</button>
             </div>
         </div>
         <ul class="history-list" id="historyList">
@@ -233,11 +233,11 @@
                             <div class="lyrics-wrapper" id="lyricsWrapper">
                                 <div class="select-function" id="function">
                                     <div class="sf-btn-group">
-                                        <button class="sf-btn" id="ttsBtn" title="朗讀當前段落">
+                                        <button class="sf-btn" id="ttsBtn" title="朗讀當前段落" data-tip="朗讀當前段落">
                                             <span class="sf-btn-icon">🔊</span>
                                             <span class="sf-btn-label">朗讀</span>
                                         </button>
-                                        <button class="sf-btn" id="maskBtn" title="遮擋字幕">
+                                        <button class="sf-btn" id="maskBtn" title="遮擋字幕" data-tip="關閉字幕，顯示圖片提示">
                                             <span class="sf-btn-icon">🙈</span>
                                             <span class="sf-btn-label">遮擋</span>
                                         </button>
@@ -249,7 +249,7 @@
                                 <div class="lyrics-view" id="lyricsView"></div>
 
                                 <!-- 遮擋後顯示的圖片區（三張正方形） -->
-                                <div class="mask-image-area" id="maskImageArea">
+                                <div class="mask-image-area" id="maskImageArea" data-tip="點擊翻面，提供文字提示" >
                                     <div class="mask-img-slot" id="maskSlot0"></div>
                                     <div class="mask-img-slot" id="maskSlot1"></div>
                                     <div class="mask-img-slot" id="maskSlot2"></div>
@@ -259,7 +259,7 @@
                             <div class="record-controls">
                                 <div class="timer-display" id="recordTimer">00:00</div>
 
-                                <div class="record-btn-row" style="display: flex; gap: 12px; justify-content: center; align-items: center; margin-bottom: 20px;">
+                                <div class="record-btn-row" style="display: flex; gap: 12px; justify-content: center; align-items: center;">
                                     <button class="record-btn" id="recordBtn">
                                         <span class="record-dot-anim"></span>
                                         <span id="recordBtnText">開始錄音</span>

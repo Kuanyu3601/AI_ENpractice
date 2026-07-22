@@ -158,7 +158,7 @@ document.addEventListener('click', (e) => {
     if (!sidebar || sidebar.classList.contains('is-collapsed')) return;
 
     const clickedInsideSidebar = sidebar.contains(e.target);
-    const clickedToggleBtn = e.target.closest('#sidebarShowBtn, #sidebarHideBtn');
+    const clickedToggleBtn = e.target.closest('#sidebarShowBtn, #sidebarHideBtn, #navHistoryBtn');
 
     if (!clickedInsideSidebar && !clickedToggleBtn) {
         collapseSidebar();
@@ -1662,6 +1662,9 @@ function _refreshStep2() {
 // ══════════════════════════════════════════════════
 //  HISTORY & SESSIONS
 // ══════════════════════════════════════════════════
+
+
+
 function saveSession() {
     if (!state.article) return;
     const key = `sessions_${state.article.title}`;
@@ -2543,8 +2546,10 @@ function _resizeMaskSlots() {
     if (!isFinite(size) || size < 20) size = 20;
 
     slots.forEach(slot => {
-        slot.style.setProperty('width',  size + 'px', 'important');
-        slot.style.setProperty('height', size + 'px', 'important');
+        slot.style.setProperty('width',      size + 'px', 'important');
+        slot.style.setProperty('height',     size + 'px', 'important');
+        slot.style.setProperty('max-width',  size + 'px', 'important');  /* 👈 新增 */
+        slot.style.setProperty('max-height', size + 'px', 'important');  /* 👈 新增 */
         slot.style.setProperty('flex', '0 0 auto', 'important');
     });
 }

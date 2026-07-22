@@ -7,6 +7,8 @@ document.addEventListener('DOMContentLoaded', () => {
     return;
   }
 
+
+
   fetch('/navbar')
     .then(res => {
       console.log('連線狀態：', res.status);
@@ -16,6 +18,10 @@ document.addEventListener('DOMContentLoaded', () => {
     .then(html => {
       container.innerHTML = html;
       console.log('Navbar 載入成功！');
+
+      if (!document.getElementById('sidebar')) {
+          container.querySelector('.nav-history-btn')?.remove();
+      }
 
       if (window.location.pathname.endsWith('main.html')) {
         const userBtn    = document.querySelector('.user-btn');

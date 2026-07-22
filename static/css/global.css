@@ -18,7 +18,7 @@
     --shadow: 0 8px 40px rgba(60,40,20,0.10);
     --radius: 20px;
     --word: #3e3e3e;
-    
+    --u: 11px;
   } 
 
 body {
@@ -30,4 +30,9 @@ body {
     color: var(--text);
 }
 
+@media (max-width: 768px) {
+    :root {
+        --u: clamp(8px, 1.2dvh, 11px);
+    }
+}
  
