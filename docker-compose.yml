@@ -22,11 +22,11 @@ services:
       - "80:80"      # 保留 80，Caddy 預設會自動把 http 導向 https
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile
-      - caddy_data:/data       # 存放自動產生的自簽憑證，容器重啟不用重新產生
+      - ./certs:/certs                    # 💡 新增：mkcert 產生的固定憑證
+      - caddy_data:/data       # 存放 Caddy 內部資料，容器重啟不用重新產生
       - caddy_config:/config
     depends_on:
       - web
-      - phpmyadmin
 
   # 2. 全新的 Python 自動化分析後端
   backend-wer:
@@ -62,14 +62,11 @@ services:
   phpmyadmin:
     image: phpmyadmin/phpmyadmin
     ports:
-      - "8080:80"   # 💡 保留這行也沒關係：你自己在本機還是可以用 localhost:8080 直接連，跟 Caddy 那條路並存不衝突
+      - "8080:80"   # 💡 phpMyAdmin 只有你自己會用，維持直接用這個 port 連線，不透過 Caddy
     environment:
       PMA_HOST: mysql
       PMA_USER: root
       PMA_PASSWORD: yourpassword
-      # 💡 新增：讓 phpMyAdmin 知道自己實際是被架在 /phpmyadmin/ 這個路徑底下，
-      #    它產生的連結、表單提交網址才會正確帶上這個前綴，不然透過 Caddy 反代之後點什麼都會壞掉。
-      PMA_ABSOLUTE_URI: https://poyu39.tw/phpmyadmin/
 
   ollama:
     image: ollama/ollama:latest
