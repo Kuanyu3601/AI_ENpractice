@@ -1180,7 +1180,7 @@ body, html {
     background: linear-gradient(135deg, #4a9de0, #2c73c0);
     border-color: #2c73c0;
     color: #fff;
-    box-shadow: 0 3px 10px rgba(44,115,192,0.35);
+    
     cursor: default;
     transform: scale(1.15);
 }
@@ -2286,6 +2286,16 @@ body, html {
         min-height: 180px;
     }
 
+    /* 📱 手機版字幕捲動：
+       1) 關掉吸附（原本 center 吸附會在句子多的段落把你想看的位置吸回中間、停不住）→ 改成完全自由捲動
+       2) 底部加大留白 → 最後一行能被往上滑到看得見的位置
+       3) scroll-padding-bottom → 程式自動捲動時底部也保留同樣緩衝 */
+    .lyrics-view {
+        scroll-snap-type: none;
+        padding-bottom: 96px;
+        scroll-padding-bottom: 96px;
+    }
+
     .record-controls {
         flex: 0 0 auto;    /* 👈 grow 和 shrink 都是 0：就是內容高度，不多不少 */
         max-height: none;
@@ -2298,8 +2308,10 @@ body, html {
     /* 💡 手機版：朗讀/遮擋按鈕改跟段落按鈕擠在同一排（由 JS 搬到 #mobileControlsRow），不再自己佔一整排 */
     .select-function {
         width: auto;
+        height: auto;
         flex-shrink: 0;
         padding-top: 0;
+        
     }
  
     .sf-btn-group {
@@ -2482,7 +2494,7 @@ body, html {
     }
     
     .mask-img-slot {
-        width: clamp(220px, 78vw, 380px) !important;
+        width: clamp(160px, 60vw, 300px) !important;
         /* 💡 核心：用 vw 當單位，螢幕越寬圖片越大、螢幕越窄圖片越小；aspect-ratio 鎖住正方形，高度自動等比跟著寬度變化，不會被拉扁或拉長 */
         height: auto !important;
         aspect-ratio: 1 / 1 !important;
@@ -2517,20 +2529,227 @@ body, html {
     justify-content: center;
     gap: 0;
 }
+
+.lyric-current {
+    font-size: 1.2rem !important;
+    font-weight: 600 !important;
+    color: #1a2a45 !important;
+    background: #deeeff !important;
+    border: 1.5px solid rgba(44, 115, 192, 0.22) !important;
+    box-shadow: 0 8px 28px rgba(44, 115, 192, 0.13) !important;
+    padding: 22px 36px !important;
+    opacity: 1 !important;
+}
+
+.upload-section {
+    max-width: 680px;
+    margin: 0 auto;
+    transition: max-width 0.28s ease;
+    margin-top: 10px;
+}
+
+
+
+.record-controls {
+    flex-shrink: 1;     /* 💡 修正：允許在空間不足時收縮，而不是被固定死 */
+    overflow-y: auto;
+    max-height: clamp(190px, 28vh, 280px); /* 💡 修正：原本鎖死 250px，現在依視窗高度縮放 */
+    padding-top: 18px;
+    border-top: 1px solid rgba(60,120,200,0.09);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    flex: 0 1 auto;   /* 💡 修正：不主動搶字幕區的空間，但需要時可以收縮 */
+    margin-bottom: 20px;
+
+}
+
+.record-content {
+
+    flex: 1;
+    min-width: 0;
+    min-height: 0;   /* 💡 修正：避免內部固定高度的子元素撐爆外層，導致無法正確依視窗縮放 */
+    display: flex;
+    flex-direction: column;
+    margin-left: 10px;
+    margin-right: 10px;
+    overflow-x: hidden;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(85,133,181,0.2) transparent;
+    padding: 0 0 24px 12px;
+}
+
+
 }
 
 /* ── 更窄的手機（例如 iPhone SE 等 <=480px）：把可放大的比例再拉高一些，
    讓小螢幕上圖片依然夠大、清楚可見 ── */
 @media (max-width: 480px) {
     .mask-img-slot {
-        width: clamp(200px, 84vw, 340px) !important;
+        width: clamp(160px, 60vw, 300px) !important;
     }
 
     .mask-image-area .lyric-nav-arrows {
-        width: clamp(200px, 84vw, 340px) !important;
+        width: clamp(160px, 60vw, 300px) !important;
     }
 
     .flip-hint-text {
         font-size: 1.4rem !important;
+    }
+}
+/* ══════════════════════════════════════════════════
+   📱 手機版：錄音完成顯示波形後，可長按邊界拖曳調整錄音區塊高度
+   （由 main.js 依「手機 + #playbackRow.visible」加上 .rc-resizable / .rc-resized）
+   ══════════════════════════════════════════════════ */
+.record-resize-handle { display: none; }
+
+@media (max-width: 768px) {
+    /* 只有「手機 + 已顯示波形」時，把手才出現在錄音區塊上緣（字幕區與錄音區的邊界） */
+    .record-section.rc-resizable .record-resize-handle {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 100%;
+        height: 24px;
+        margin: -8px 0 0;
+        flex: 0 0 auto;
+        cursor: ns-resize;
+        touch-action: none;                       /* 把手本身不觸發頁面捲動，長按拖曳才生效 */
+        -webkit-tap-highlight-color: transparent;
+    }
+    .record-resize-handle .rrh-grip {
+        width: 46px;
+        height: 5px;
+        border-radius: 999px;
+        background: rgba(85, 133, 181, 0.4);
+        transition: background 0.15s ease, width 0.15s ease, height 0.15s ease;
+    }
+    /* 長按啟動、正在調整時：把手變紅、變寬，給明確的操作回饋 */
+    .record-section.rc-resizable .record-resize-handle.active .rrh-grip {
+        background: #e63946;
+        width: 64px;
+        height: 6px;
+    }
+
+    /* ── 調整中：讓 .record-main 成為定位基準 ── */
+    .record-main.rc-resizing {
+        position: relative;
+    }
+
+    /* 💡 覆蓋模式：已手動拉高後，錄音區塊改成「絕對定位的覆蓋層」，
+       從底部往上延伸，用不透明背景直接蓋住下方文字，
+       完全不去擠壓/重排字幕區（字幕高度由 JS 凍結、維持原樣）。 */
+    .record-controls.rc-overlay {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 20;
+        flex: 0 0 auto !important;
+        min-height: 0 !important;
+        max-height: none !important;
+        margin: 0 !important;
+        padding-top: 26px;              /* 預留頂端把手空間 */
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        background: #ffffff;            /* 不透明背景，才能真正蓋住底下文字 */
+        border-top: 1px solid rgba(60, 120, 200, 0.12);
+        border-radius: 16px 16px 0 0;
+        
+    }
+    
+
+    /* 覆蓋模式下，把手固定在覆蓋層頂端＝可拖曳的邊界 */
+    .record-controls.rc-overlay .record-resize-handle {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        margin: 0;
+        padding-top: 6px;
+        background: #ffffff;
+        border-radius: 16px 16px 0 0;
+        z-index: 2;
+    }
+}
+
+/* ══════════════════════════════════════════════════
+   📱 手機版：評分結果頁（Step3 / .score-section）版面調整
+   —— 用「class 範圍 + inline 樣式屬性選擇器」同時命中「分段」與「整篇」兩套 JS 產生的報告，
+      所以不需要改 JS。想微調就改下面的數值。
+   ══════════════════════════════════════════════════ */
+@media (max-width: 768px) {
+    /* 結果頁整體內距收一點 */
+    .score-section {
+        padding: 12px !important;
+        gap: 16px !important;
+    }
+
+    /* ── (1) 縮小「整體朗讀結算」佔比：外框內距、分數卡、數字全部縮小 ── */
+    .wer-score-banner {
+        padding: 14px 16px !important;
+        margin-top: 10px !important;
+    }
+    .wer-score-banner h2 {
+        font-size: 1rem !important;
+        margin-bottom: 12px !important;
+    }
+    .wer-score-banner [style*="min-width: 200px"] {   /* 兩張分數卡 */
+        min-width: 0 !important;
+        padding: 12px 10px !important;
+    }
+    #werScoreText,
+    #werFluencyScore100 {                              /* 兩個大數字 */
+        font-size: 1.6rem !important;
+        margin-top: 4px !important;
+    }
+
+    /* ── (2) 段落詳細回報：標題列/內文區內距與間距收緊、數字字級縮小，文字才排得下、對齊更整齊 ── */
+    #werParagraphsContainer [style*="padding: 18px 24px"] {   /* 段落標題列 */
+        padding: 12px 14px !important;
+    }
+    #werParagraphsContainer [style*="padding: 24px"] {        /* 段落內文區 */
+        padding: 14px !important;
+    }
+    #werParagraphsContainer [style*="gap: 30px"] { gap: 8px 12px !important; }
+    #werParagraphsContainer [style*="gap: 24px"] { gap: 8px 12px !important; }
+    #werParagraphsContainer [style*="min-width: 65px"] {      /* 「段落 N」標籤不強制佔寬 */
+        min-width: 0 !important;
+        font-size: 0.95rem !important;
+    }
+    #werParagraphsContainer [style*="font-size: 0.92rem"] { font-size: 0.8rem !important; }
+    #werParagraphsContainer strong { font-size: 0.95rem !important; }
+
+    /* ── (3) 面向分析／口語流暢分析：原本 min-width:300px 在窄螢幕會超出被切掉 →
+            改成可縮、直向堆疊、填滿寬度，就不會再被切 ── */
+    .score-section [style*="min-width: 300px"] {
+        min-width: 0 !important;
+        flex: 1 1 100% !important;
+        padding: 12px !important;
+    }
+
+    /* ── (4) 縮小錄音回放的四個指標按鈕（發音完整度/準確度/口說流利度/口語流暢度）── */
+    .score-section [style*="padding:6px 14px"][style*="border:2px"] {   /* 四個色框（match-nav 是 1px 邊框，不受影響）*/
+        padding: 3px 8px !important;
+        border-width: 1px !important;
+        border-radius: 8px !important;
+    }
+    .category-label-clickable {
+        font-size: 0.72rem !important;
+        gap: 1px !important;
+    }
+    .category-label-clickable span {   /* 括號內的 (x/y) 與 👆 一起縮 */
+        font-size: 0.6rem !important;
+    }
+
+    .metric-chip-grid {
+        display: grid !important;
+        grid-template-columns: 1fr 1fr !important;   /* 兩欄 → 兩兩一列 */
+        gap: 8px !important;
+    }
+    .metric-chip-grid > div {
+        width: 100% !important;
+        box-sizing: border-box !important;
     }
 }

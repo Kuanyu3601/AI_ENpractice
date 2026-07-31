@@ -238,8 +238,8 @@
                                             <span class="sf-btn-label">朗讀</span>
                                         </button>
                                         <button class="sf-btn" id="maskBtn" title="遮擋字幕" data-tip="關閉字幕，顯示圖片提示">
-                                            <span class="sf-btn-icon">🙈</span>
-                                            <span class="sf-btn-label">遮擋</span>
+                                            <span class="sf-btn-icon">🖼️</span>
+                                            <span class="sf-btn-label">圖片</span>
                                         </button>
                                     </div>
 
@@ -257,6 +257,10 @@
                             </div>
 
                             <div class="record-controls">
+                                <!-- 📱 手機版：錄音完成顯示波形後，長按此邊界即可上下拖曳調整錄音區塊高度 -->
+                                <div class="record-resize-handle" id="recordResizeHandle" title="長按可調整錄音區高度">
+                                    <span class="rrh-grip"></span>
+                                </div>
                                 <div class="timer-display" id="recordTimer">00:00</div>
 
                                 <div class="record-btn-row" style="display: flex; gap: 12px; justify-content: center; align-items: center;">

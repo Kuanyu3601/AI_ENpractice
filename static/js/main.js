@@ -1202,7 +1202,16 @@ function renderLyricsCore() {
 
     const curEl = view.querySelector('.lyric-current');
     if (curEl) {
-        curEl.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        // 💡 只捲動字幕容器本身（不要用 scrollIntoView，它會連外層頁面一起捲、把上緣頂掉）。
+        //    一律「對齊目前段落頂端」：目前段落的第一句永遠貼在字幕區上方、不會被推出畫面，
+        //    其餘內容往下自由捲動閱讀。（未錄音頁在整篇模式尤其重要：不會把上面的段落吸走害你看不到開頭）
+        const TOP_GAP  = 16;   // 段落上緣與字幕區頂端保留的一點緩衝
+        const isFirst  = curEl.dataset.paraIdx === '0' || !curEl.previousElementSibling;
+        let targetTop  = isFirst ? 0 : (curEl.offsetTop - TOP_GAP);
+
+        const maxTop = Math.max(0, view.scrollHeight - view.clientHeight);
+        targetTop = Math.max(0, Math.min(targetTop, maxTop));
+        view.scrollTo({ top: targetTop, behavior: 'smooth' });
     }
 
     if (window._isMasked) {
@@ -2532,11 +2541,13 @@ function _resizeMaskSlots() {
 
     let size;
     if (isColumn) {
-        // 手機版直向堆疊：不除以張數，每張圖直接盡量佔滿容器寬度，
-        // 超出高度交給 overflow-y:auto 滑動，上限拉高讓圖片明顯變大
-        const availableWidth = rect.width - padLeft - padRight;
-        const maxSize = window.innerWidth <= 480 ? 460 : 520;
-        size = Math.min(availableWidth, maxSize);
+        // 手機版直向堆疊：每張圖大小 = 視窗寬度的一半，夾在 160~300px。
+        // （對應原本 CSS 的 clamp(160px, 50vw, 300px)，因為這裡用 !important 寫死，才是真正生效的地方）
+        // 👉 想改大小就調這三個數字：MIN_SIZE / VW_RATIO / MAX_SIZE
+        const MIN_SIZE = 160;   // 最小邊長(px)
+        const VW_RATIO = 0.60;  // 佔視窗寬度的比例（調小=圖片更小）
+        const MAX_SIZE = 300;   // 最大邊長(px)
+        size = Math.max(MIN_SIZE, Math.min(window.innerWidth * VW_RATIO, MAX_SIZE));
     } else {
         // 桌機版橫向並排：維持原本邏輯
         const availableWidth  = rect.width  - padLeft - padRight  - gap * (slots.length - 1);
@@ -2623,8 +2634,8 @@ function initMaskBtn() {
         }
 
         maskBtn.classList.toggle('mask-active', window._isMasked);
-        maskBtn.querySelector('.sf-btn-icon').textContent = window._isMasked ? '👁' : '🙈';
-        maskBtn.querySelector('.sf-btn-label').textContent = window._isMasked ? '顯示' : '遮擋';
+        maskBtn.querySelector('.sf-btn-icon').textContent = window._isMasked ? '💬' : '🖼️';
+        maskBtn.querySelector('.sf-btn-label').textContent = window._isMasked ? '文字' : '圖片';
     });
 }
 
@@ -3972,8 +3983,10 @@ function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl, w
                 🎵 錄音回放
             </div>
 
-            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom: 10px;">
-                <button id="${stripId}-playbtn" type="button" style="padding:6px 16px; border:none; background:#e63946; color:#fff; border-radius:20px; font-weight:bold; cursor:pointer; font-size:0.85rem; white-space:nowrap;">▶ 播放</button>
+            <div style="display:flex; flex-direction:column; gap:10px; margin-bottom: 10px;">
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                    <button id="${stripId}-playbtn" type="button" style="padding:6px 16px; border:none; background:#e63946; color:#fff; border-radius:20px; font-weight:bold; cursor:pointer; font-size:0.85rem; white-space:nowrap;">▶ 播放</button>
+                
 
                 <!-- 💡 整篇模式專用：跳到上一段/下一段開頭，方便在整篇錄音裡快速定位到原本文章的段落分界。
                      沒有段落分界資料時（分段模式）JS 會自動隱藏這個按鈕組。 -->
@@ -3983,7 +3996,10 @@ function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl, w
                     <span onclick="window.navToParagraph('${stripId}', 1)" title="下一段開頭" style="cursor:pointer; font-size:1rem; color:#475569; font-weight:bold; user-select:none;">⏭</span>
                 </div>
 
-                <div style="width:1px; height:22px; background:#e2e8f0; margin: 0 4px;"></div>
+                </div>
+                <!-- 第二列：四個指標按鈕（桌面一排、手機 2×2；由 .metric-chip-grid 控制） -->
+                <div class="metric-chip-grid" style="display:flex; flex-wrap:wrap; gap:8px;">
+                <!-- 💡 發音完整度 ... -->
 
                 <!-- 💡 發音完整度：底層的刪除/插入/替換按鈕隱藏起來（不對外呈現計分細節），
                      標籤點擊後會一次觸發「刪除+插入+替換」三種錯誤的標色與跳轉，同時顯示 LLM 評語+TTS。 -->
@@ -4012,7 +4028,7 @@ function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl, w
                     </div>
                 </div>
 
-                <div style="width:1px; height:22px; background:#e2e8f0; margin: 0 4px;"></div>
+                
 
                 <!-- 💡 口語流暢度：底層的「流暢度」按鈕隱藏起來，標籤點擊後觸發句子層級標色/跳轉 + LLM 評語+TTS。 -->
                 <div style="border:2px solid #9333ea; border-radius:10px; padding:6px 14px; background:#faf5ff;">
@@ -4020,6 +4036,7 @@ function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl, w
                     <div style="display:none;">
                         <button class="wer-filter-btn-chunked" data-original-bg="#fff" data-original-color="#9333ea" onclick="window.switchWerFilterChunked(this, 'fluency', '${stripId}')" style="padding: 5px 12px; border:none; background: #fff; color: #9333ea; border-radius: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size:0.85rem;">流暢度 (${fluencyFlaggedCount})</button>
                     </div>
+                </div>
                 </div>
             </div>
 
@@ -4719,18 +4736,7 @@ function renderMultipleParagraphsReport(paragraphList, globalStats, mode = 'segm
             }
         });
 
-        // 💡 新增：報告最下方加一個「反覆練習」按鈕，功能跟左上角轉圈箭頭的複習按鈕一致
-        //    （直接呼叫同一個 createNewProject('retry')），用同一篇文章的內容重新開始一次新的練習。
-        if (typeof createNewProject === 'function') {
-            const retryWrap = document.createElement('div');
-            retryWrap.style.cssText = 'width:100%; display:flex; justify-content:center; margin-top:20px; padding-top:16px; border-top:1px solid #e2e8f0;';
-            retryWrap.innerHTML = `
-                <button type="button" onclick="createNewProject('retry')" style="display:flex; align-items:center; gap:8px; padding:10px 24px; border:none; background:#2563eb; color:#fff; border-radius:24px; font-weight:bold; font-size:0.9rem; cursor:pointer; box-shadow:0 2px 8px rgba(37,99,235,0.3);">
-                    <span style="font-size:1.1rem;">🔄</span> 反覆練習這篇文章
-                </button>
-            `;
-            container.appendChild(retryWrap);
-        }
+       
 
     } catch (err) {
         console.error("❌ 渲染歷史大禮包手風琴失敗:", err);
@@ -4879,3 +4885,146 @@ function displayProjectsInSidebar(projects) {
         historyList.appendChild(li);
     });
 }
+
+/* ══════════════════════════════════════════════════
+   📱 手機版：錄音完成顯示波形後，長按錄音區塊上緣邊界即可拖曳「往上蓋住文字」
+   ──────────────────────────────────────────────────
+   - 觸發條件：手機寬度 (<=768px) 且波形已顯示 (#playbackRow.visible)
+   - 長按把手 ~320ms 啟動，接著同一根手指往上拖 = 覆蓋層變高（蓋住下方文字）
+   - 錄音區塊改為絕對定位的覆蓋層，字幕區高度被凍結、不擠壓
+   - 最高可蓋滿整個錄音內容區塊 (.record-main)；最低為初始高度
+   - 「全部重錄」等任何讓波形收起的動作（會呼叫 resetRecordUI 移除 #playbackRow 的
+     visible class）都會自動還原成初始狀態
+   ══════════════════════════════════════════════════ */
+document.addEventListener('DOMContentLoaded', () => {
+    const MOBILE_MAX  = 768;
+    const MOVE_START  = 6;     // 在把手上滑動超過此距離(px)就立刻啟動調整（不需長按）
+
+    const controls      = document.querySelector('.record-controls');
+    const recordMain    = document.querySelector('.record-main');
+    const recordSec     = document.getElementById('recordSection');
+    const handle        = document.getElementById('recordResizeHandle');
+    const playbackRow   = document.getElementById('playbackRow');
+    const lyricsWrapper = document.getElementById('lyricsWrapper');
+    if (!controls || !recordMain || !recordSec || !handle || !playbackRow) return;
+
+    const isMobile    = () => window.innerWidth <= MOBILE_MAX;
+    const waveVisible = () => playbackRow.classList.contains('visible');
+
+    let armed     = false;   // 已啟動、正在調整中
+    let pointerId = null;
+    let downY = 0, downX = 0, lastY = 0, startY = 0, startH = 0;
+
+    // 還原成初始狀態（清掉覆蓋層高度、解除字幕凍結）
+    function resetHeight() {
+        controls.style.height = '';
+        controls.classList.remove('rc-overlay');
+        recordMain.classList.remove('rc-resizing');
+        if (lyricsWrapper) lyricsWrapper.style.flex = '';   // 解除字幕高度凍結
+    }
+
+    // 依「手機 + 波形顯示中」切換把手；一旦離開此狀態就還原初始高度
+    function syncHandle() {
+        const on = isMobile() && waveVisible();
+        recordSec.classList.toggle('rc-resizable', on);
+        if (on) {
+            // 尚未進入覆蓋模式時，記錄目前自然高度，作為最小值 / 還原基準（即「初始高度」）
+            if (!controls.classList.contains('rc-overlay')) {
+                controls._naturalH = controls.offsetHeight;
+            }
+        } else {
+            resetHeight();
+            controls._naturalH = 0;
+        }
+    }
+
+    function clampHeight(h) {
+        const min = controls._naturalH || controls.offsetHeight;
+        // 最高只到「內容全部展開」的高度（所有按鈕都顯示、剛好不用捲），避免多出空白；
+        // 同時不超過整個錄音區塊的高度。
+        const full = controls._fullH || recordMain.clientHeight;
+        const max  = Math.max(min, Math.min(full, recordMain.clientHeight));
+        return Math.min(max, Math.max(min, h));
+    }
+
+    // 長按門檻到了 → 正式進入「覆蓋」調整模式
+    function arm() {
+        armed  = true;
+        startY = lastY;                       // 以長按當下的手指位置為基準，避免拖曳一開始跳動
+        startH = controls.offsetHeight;       // 目前（初始）高度
+        if (!controls._naturalH) controls._naturalH = startH;
+
+        // 💡 先凍結字幕區目前高度，讓它在錄音區塊變成覆蓋層後不會重排/被擠壓
+        if (lyricsWrapper) {
+            lyricsWrapper.style.flex = '0 0 ' + lyricsWrapper.offsetHeight + 'px';
+        }
+        // 錄音區塊改成絕對定位的覆蓋層，並先固定在初始高度（外觀不變，只是脫離文件流）
+        recordMain.classList.add('rc-resizing');   // 讓 .record-main 成為定位基準
+        controls.classList.add('rc-overlay');
+        // 💡 量測「內容全部展開」需要的高度（所有錄音按鈕都露出、剛好不用捲）當作拉高上限，
+        //    此時還沒設固定高度、max-height:none，scrollHeight 就是完整內容高度。
+        controls._fullH = controls.scrollHeight;
+        controls.style.height = startH + 'px';
+
+        handle.classList.add('active');
+        document.body.style.userSelect = 'none';
+        if (navigator.vibrate) { try { navigator.vibrate(15); } catch (e) {} }
+    }
+
+    function endDrag() {
+        armed = false;
+        handle.classList.remove('active');
+        document.body.style.userSelect = '';
+        if (pointerId != null) { try { handle.releasePointerCapture(pointerId); } catch (e) {} }
+        pointerId = null;
+    }
+
+    handle.addEventListener('pointerdown', (e) => {
+        if (!isMobile() || !waveVisible()) return;
+        pointerId = e.pointerId;
+        downY = lastY = startY = e.clientY;
+        downX = e.clientX;
+        startH = controls.offsetHeight;
+        if (!controls._naturalH) controls._naturalH = startH;
+        try { handle.setPointerCapture(pointerId); } catch (err) {}
+        // 不再等長按：改成在下面 pointermove 一滑動就啟動
+    });
+
+    handle.addEventListener('pointermove', (e) => {
+        if (pointerId == null) return;
+        lastY = e.clientY;
+        if (!armed) {
+            // 💡 在把手上滑動超過小門檻 → 立刻啟動調整（滑動即啟動，免長按）
+            if (Math.abs(e.clientY - downY) > MOVE_START ||
+                Math.abs(e.clientX - downX) > MOVE_START) {
+                arm();
+            } else {
+                return;
+            }
+        }
+        e.preventDefault();
+        const delta = startY - e.clientY;                    // 往上拖 → delta 為正 → 變高
+        controls.style.height = clampHeight(startH + delta) + 'px';
+    }, { passive: false });
+
+    handle.addEventListener('pointerup',          endDrag);
+    handle.addEventListener('pointercancel',      endDrag);
+    handle.addEventListener('lostpointercapture', endDrag);
+
+    // 波形顯示/收起（含「全部重錄」呼叫的 resetRecordUI）都會改動 #playbackRow 的 class，
+    // 這裡監看它 → 自動顯示/隱藏把手，並在收起時還原初始狀態
+    new MutationObserver(syncHandle).observe(playbackRow, {
+        attributes: true, attributeFilter: ['class']
+    });
+
+    // 視窗尺寸變化：回到桌面版就還原；仍在手機版則重新夾住高度避免超界
+    window.addEventListener('resize', () => {
+        if (!isMobile()) resetHeight();
+        syncHandle();
+        if (controls.classList.contains('rc-overlay') && controls.style.height) {
+            controls.style.height = clampHeight(parseFloat(controls.style.height)) + 'px';
+        }
+    });
+
+    syncHandle();
+});
