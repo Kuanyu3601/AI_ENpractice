@@ -810,6 +810,11 @@ function _restoreRecordedBadges() {
 }
 
 function updateStepUI() {
+
+    if (typeof stopChineseFeedback === 'function') stopChineseFeedback();
+    const _fbPopup = document.getElementById('category-feedback-popup');
+    if (_fbPopup) _fbPopup.style.display = 'none';
+
     // Panels — use inline style.display as well as class,
     // so Safari cache issues with CSS cannot block switching.
     document.querySelectorAll('.step-panel').forEach((panel, i) => {
@@ -3555,11 +3560,41 @@ function splitFeedbackIntoSegments(text) {
     return segments.length ? segments : [{ text, lang: 'zh' }];
 }
 
+// 💡 「播放批次代號」：評語是一段一段輪流唸的，每唸完一段會排下一段。
+//    按叉叉／點浮框外／切換分類要停止時，光呼叫 speechSynthesis.cancel() 不夠——
+//    取消當下那段會觸發它的 onend/onerror，反而又排了下一段去唸（叉叉按了還會繼續唸）。
+//    所以用這個遞增代號：一旦停止就把代號 +1，讓任何排程中的下一段自動失效。
+let _feedbackSpeechToken = 0;
+
+function stopChineseFeedback() {
+    _feedbackSpeechToken++;   // 讓任何還在排隊的 speakNext 立刻作廢
+    if (typeof speechSynthesis !== 'undefined') {
+        // 💡 Chrome 在「暫停中」呼叫 cancel() 有時停不乾淨，先 resume 再 cancel 比較保險
+        try { if (speechSynthesis.paused) speechSynthesis.resume(); } catch (e) {}
+        speechSynthesis.cancel();
+    }
+}
+// 💡 曝露到全域，讓 HTML 上任何「關閉視窗／返回」按鈕都能直接呼叫 window.stopChineseFeedback()
+window.stopChineseFeedback = stopChineseFeedback;
+
+/**
+ * 💡 統一的「關閉評語浮框」動作：把浮框藏起來 + 徹底停止朗讀。
+ *    任何關閉入口（浮框叉叉、點浮框外、切換步驟、關閉評分視窗）都走這裡，行為才會一致。
+ */
+function closeCategoryFeedbackPopup() {
+    const popup = document.getElementById('category-feedback-popup');
+    if (popup) popup.style.display = 'none';
+    stopChineseFeedback();
+}
+window.closeCategoryFeedbackPopup = closeCategoryFeedbackPopup;
+
 function speakChineseFeedback(text, onEndCallback) {
     if (!text || !text.trim()) {
         if (onEndCallback) onEndCallback();
         return;
     }
+    // 💡 開一個新的播放批次：先讓先前批次全部作廢，再清掉舊佇列
+    const myToken = ++_feedbackSpeechToken;
     speechSynthesis.cancel();
 
     const segments = splitFeedbackIntoSegments(text);
@@ -3568,6 +3603,9 @@ function speakChineseFeedback(text, onEndCallback) {
 
     let idx = 0;
     function speakNext() {
+        // 💡 若中途被停止（按叉叉/點外面/切換），或又有新的播放開始，
+        //    myToken 就不再是最新的 → 立刻停手，不再唸下一段。
+        if (myToken !== _feedbackSpeechToken) return;
         if (idx >= segments.length) {
             if (onEndCallback) onEndCallback();
             return;
@@ -3587,15 +3625,14 @@ function speakChineseFeedback(text, onEndCallback) {
         }
         utt.pitch = 1;
 
-        utt.onend = () => setTimeout(speakNext, 50);
-        utt.onerror = () => setTimeout(speakNext, 50);
+        // 💡 排下一段前也要確認批次還是最新的，否則被取消時 onend/onerror 會又接著唸
+        utt.onend = () => { if (myToken === _feedbackSpeechToken) setTimeout(speakNext, 50); };
+        utt.onerror = () => { if (myToken === _feedbackSpeechToken) setTimeout(speakNext, 50); };
 
         speechSynthesis.speak(utt);
     }
 
-    // 💡 剛呼叫完 cancel() 別馬上呼叫 speak()，Chrome 在同一瞬間執行這兩個動作
-    //    偶爾會讓語音佇列卡住完全沒有聲音，延遲一點點可以繞開這個問題。
-    setTimeout(speakNext, 60);
+    setTimeout(() => { if (myToken === _feedbackSpeechToken) speakNext(); }, 60);
 }
 
 // ══════════════════════════════════════════════════
@@ -3747,8 +3784,7 @@ function ensureCategoryFeedbackPopup() {
     const replayIcon = document.getElementById('category-feedback-replay');
 
     closeBtn.onclick = () => {
-        popup.style.display = 'none';
-        speechSynthesis.cancel();
+        closeCategoryFeedbackPopup();   // 💡 按右上角叉叉：關閉浮框 + 徹底停止評語朗讀
     };
     pauseIcon.onclick = () => {
         if (!speechSynthesis.speaking) return;
@@ -3777,9 +3813,20 @@ function ensureCategoryFeedbackPopup() {
         if (popup.style.display === 'none') return;
         if (popup.contains(e.target)) return;
         if (e.target.closest('.category-label-clickable')) return;
-        popup.style.display = 'none';
-        speechSynthesis.cancel();
+        closeCategoryFeedbackPopup();   // 💡 點浮框外關閉時，評語也要一併停止
     });
+
+    // 💡 最強保險：只要這個浮框被「任何方式」隱藏（不管是哪顆關閉/返回按鈕，
+    //    或別的程式把它 display:none），就自動停止朗讀。這樣就算關閉入口不在這支檔案裡，
+    //    只要它讓浮框消失，Ollama 評語也一定會跟著停。
+    let _popupWasVisible = false;
+    new MutationObserver(() => {
+        const visible = popup.style.display !== 'none' && document.body.contains(popup);
+        if (_popupWasVisible && !visible) {
+            stopChineseFeedback();   // 由「顯示」變成「隱藏」的那一刻 → 停止朗讀
+        }
+        _popupWasVisible = visible;
+    }).observe(popup, { attributes: true, attributeFilter: ['style'] });
 
     return popup;
 }
