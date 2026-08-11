@@ -136,16 +136,45 @@
     transition: background 0.2s;
 }
 .side-change-pw:hover { background: #1a5aa8; }
-/* ── 手機版：讓出左側空間給側欄開合按鈕，避免跟 logo 重疊 ── */
+
+.nav-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.nav-history-btn {
+    display: none;        /* 桌機不顯示，桌機用側欄自己的收合鍵 */
+}
+
 @media (max-width: 768px) {
     nav {
-        padding-left: 56px;
+        height: calc(var(--u) * 6);
+        padding-left: 1rem;        /* 👈 原本 52px，不用再幫浮動按鈕讓位了 */
+        padding-right: 1rem;
     }
 
-    .user-btn {
-      padding: 6px 0px;
-      margin-right: 0px;
+    .nav-history-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: calc(var(--u) * 3.25);
+        height: calc(var(--u) * 3.25);
+        padding: 0;
+        flex-shrink: 0;
+        border: 1px solid rgba(60,120,200,0.18);
+        border-radius: 8px;
+        background: #f2f7ff;
+        color: #5585b5;
+        font-size: calc(var(--u) * 1.5);
+        line-height: 1;
+        cursor: pointer;
+    }
 
+    .nav-left { gap: 8px; }
 
-  }
+    .logo-icon     { width: calc(var(--u) * 3.5);  height: calc(var(--u) * 3.5); }
+    .logo-icon svg { width: calc(var(--u) * 2);    height: calc(var(--u) * 2); }
+    .logo-text     { font-size: calc(var(--u) * 2.1); }
+    .user-btn      { width: calc(var(--u) * 3.25); height: calc(var(--u) * 3.25); padding: 0; }
 }

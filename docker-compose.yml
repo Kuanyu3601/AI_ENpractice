@@ -11,20 +11,17 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
-  # 💡 修正：caddy 之前被寫進 web 底下變成子項目了，要跟 web 同一層縮排，
-  #    才是一個獨立的 service，不然 docker compose 會解析錯誤或直接忽略這個設定。
-  caddy:
-    image: caddy:2-alpine
-    container_name: caddy
-    restart: always
-    ports:
-      - "443:443"   # 其他裝置連線用這個 port，走 HTTPS
-      - "80:80"      # 保留 80，Caddy 預設會自動把 http 導向 https
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile
-      - ./certs:/certs                    # 💡 新增：mkcert 產生的固定憑證
-      - caddy_data:/data       # 存放 Caddy 內部資料，容器重啟不用重新產生
-      - caddy_config:/config
+  # 💡 改用 Cloudflare Tunnel，取代原本的 Caddy + 自簽憑證。
+  #    好處：拿到的網址是 Cloudflare 自己簽發的正式憑證，所有瀏覽器/手機天生信任，
+  #    完全不需要學生的裝置額外安裝任何憑證，也不需要 VPN、不需要固定 IP。
+  #    這是「快速通道(quick tunnel)」模式，不用註冊 Cloudflare 帳號，
+  #    每次重啟容器網址會換一次（測試用完全足夠；之後如果想要固定網址，
+  #    可以升級成註冊帳號的「具名通道」，我可以再幫你設定）。
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --protocol http2 --url http://web:5000
     depends_on:
       - web
 
@@ -89,5 +86,3 @@ volumes:
   mysql_data:
   shared-data:
   ollama_data:
-  caddy_data:
-  caddy_config:

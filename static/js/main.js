@@ -158,12 +158,42 @@ document.addEventListener('click', (e) => {
     if (!sidebar || sidebar.classList.contains('is-collapsed')) return;
 
     const clickedInsideSidebar = sidebar.contains(e.target);
-    const clickedToggleBtn = e.target.closest('#sidebarShowBtn, #sidebarHideBtn');
+    const clickedToggleBtn = e.target.closest('#sidebarShowBtn, #sidebarHideBtn, #navHistoryBtn');
 
     if (!clickedInsideSidebar && !clickedToggleBtn) {
         collapseSidebar();
     }
 });
+
+function relayoutMobileControls() {
+    const functionEl    = document.getElementById('function');
+    const mobileRow      = document.getElementById('mobileControlsRow');
+    const lyricsWrapper  = document.getElementById('lyricsWrapper');
+    const lyricsView     = document.getElementById('lyricsView');
+    if (!functionEl || !mobileRow || !lyricsWrapper || !lyricsView) return;
+
+    const isMobile = window.innerWidth <= 768;
+
+    if (isMobile) {
+        // 手機版：把按鈕搬進段落列所在的共用列（跟在段落按鈕後面，形成同一排）
+        if (functionEl.parentElement !== mobileRow) {
+            mobileRow.appendChild(functionEl);
+        }
+    } else {
+        // 桌面版：搬回原本位置（字幕區 #lyricsView 之前）
+        if (functionEl.parentElement !== lyricsWrapper || functionEl.nextElementSibling !== lyricsView) {
+            lyricsWrapper.insertBefore(functionEl, lyricsView);
+        }
+    }
+}
+
+document.addEventListener('DOMContentLoaded', relayoutMobileControls);
+window.addEventListener('resize', () => {
+    clearTimeout(window._controlsRelayoutTimer);
+    window._controlsRelayoutTimer = setTimeout(relayoutMobileControls, 80);
+});
+
+
 
 // Kitten's_Choice 各段提示圖片設定
 // 格式：每個段落（索引0, 1, 2...）對應三張圖片的路徑
@@ -574,7 +604,7 @@ function bindEvents() {
     safeBind('modalConfirmBtn', 'click', confirmAge);
     safeBind('prevArrow', 'click', () => navigateStep(-1));
     safeBind('nextArrow', 'click', () => navigateStep(1));
-    safeBind('clearBtn', 'click', clearSelection);
+    
     safeBind('startBtn', 'click', startPractice);
     safeBind('recordBtn', 'click', toggleRecord);
     safeBind('uploadAudioBtn', 'click', uploadAudio);
@@ -780,6 +810,11 @@ function _restoreRecordedBadges() {
 }
 
 function updateStepUI() {
+
+    if (typeof stopChineseFeedback === 'function') stopChineseFeedback();
+    const _fbPopup = document.getElementById('category-feedback-popup');
+    if (_fbPopup) _fbPopup.style.display = 'none';
+
     // Panels — use inline style.display as well as class,
     // so Safari cache issues with CSS cannot block switching.
     document.querySelectorAll('.step-panel').forEach((panel, i) => {
@@ -855,14 +890,44 @@ function renderPreview(article) {
     }
 }
 
-function clearSelection() {
-    state.article = null;
-    document.querySelectorAll('.article-card').forEach(c => c.classList.remove('selected'));
-    document.getElementById('selectedPreview').classList.remove('visible');
-    document.getElementById('startBtn').disabled = true;
-    document.getElementById('readingCountNum').textContent = '—';
-    document.getElementById('readingHistoryList').innerHTML = '<p class="dropdown-empty">請先選擇文章</p>';
+// 💡 依目前作用中的專案是否為「複習」，決定文章預覽右上角清除鍵要不要顯示。
+//    第一次練習 → 顯示清除鍵（可清除文章、回到只有選擇文章的狀態）
+//    複習(retry) → 隱藏清除鍵（不可清除文章）
+function _updateClearBtnVisibility() {
+    const clearBtn = document.getElementById('clearBtn');
+    if (!clearBtn) return;
+    const proj = state.projects[state.activeProjectId];
+    clearBtn.style.display = (proj && proj.isRetry) ? 'none' : '';
 }
+
+function renderPreview(article) {
+    if (!article || !article.paragraphs) return;
+
+    const titleEl = document.getElementById('previewTitle');
+    const contentEl = document.getElementById('previewContent');
+    const areaEl = document.getElementById('selectedPreview');
+
+    if (titleEl) titleEl.textContent = `${article.title}`;
+
+    if (contentEl) {
+        contentEl.innerHTML = article.paragraphs.map((p, i) => `
+            <div class="preview-para">
+                <span class="para-tag">段落 ${i + 1}</span>
+                <p>${p}</p>
+            </div>
+        `).join('');
+    }
+
+    if (areaEl) {
+        areaEl.classList.add('visible');
+        areaEl.style.display = 'block';
+    }
+
+    _updateClearBtnVisibility();   // 💡 新增：依複習/首次決定清除鍵顯示
+}
+
+
+
 
 function processFile(file) {
     if (!file.name.endsWith('.txt')) {
@@ -1142,7 +1207,16 @@ function renderLyricsCore() {
 
     const curEl = view.querySelector('.lyric-current');
     if (curEl) {
-        curEl.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        // 💡 只捲動字幕容器本身（不要用 scrollIntoView，它會連外層頁面一起捲、把上緣頂掉）。
+        //    一律「對齊目前段落頂端」：目前段落的第一句永遠貼在字幕區上方、不會被推出畫面，
+        //    其餘內容往下自由捲動閱讀。（未錄音頁在整篇模式尤其重要：不會把上面的段落吸走害你看不到開頭）
+        const TOP_GAP  = 16;   // 段落上緣與字幕區頂端保留的一點緩衝
+        const isFirst  = curEl.dataset.paraIdx === '0' || !curEl.previousElementSibling;
+        let targetTop  = isFirst ? 0 : (curEl.offsetTop - TOP_GAP);
+
+        const maxTop = Math.max(0, view.scrollHeight - view.clientHeight);
+        targetTop = Math.max(0, Math.min(targetTop, maxTop));
+        view.scrollTo({ top: targetTop, behavior: 'smooth' });
     }
 
     if (window._isMasked) {
@@ -1449,6 +1523,20 @@ function hideUploadProgress() {
 }
 
 async function uploadAudio() {
+    // 🔧 核心修正：按鈕禁用要在「最開頭」就做，不能等到錄音停止的非同步流程跑完才做！
+    //    原本的寫法是：先等錄音停止(await) → 才禁用按鈕 → 才上傳。
+    //    這段等待期間按鈕還是可以點的，如果使用者連點兩下（或手機誤觸），
+    //    會觸發兩個各自獨立執行的 uploadAudio()，同一段音檔被送出兩次，
+    //    後端 Ollama 也會被呼叫兩次，資料庫最後只會留下「後面那次」覆蓋掉的結果——
+    //    這就是為什麼你會在 log 裡看到同一次上傳卻打了兩次 Ollama。
+    const btn = document.getElementById('uploadAudioBtn');
+    if (btn && btn.disabled) {
+        // 💡 防止重複進入：按鈕已經是禁用狀態，代表已經有一個上傳正在跑，直接忽略這次呼叫
+        console.warn('⚠️ 已經有一個上傳正在進行中，忽略這次重複觸發');
+        return;
+    }
+    if (btn) { btn.disabled = true; btn.textContent = '上傳中…'; }
+
     if (state.recordState === 'recording' && state.mediaRecorder && state.mediaRecorder.state !== 'inactive') {
         const finalizePromise = new Promise(resolve => {
             state.mediaRecorder.onstop = async () => {
@@ -1463,10 +1551,11 @@ async function uploadAudio() {
         await finalizePromise;
     }
 
-    if (!state.recordingBlob) { showToast('請先錄音再上傳'); return; }
-
-    const btn = document.getElementById('uploadAudioBtn');
-    if (btn) { btn.disabled = true; btn.textContent = '上傳中…'; }
+    if (!state.recordingBlob) {
+        showToast('請先錄音再上傳');
+        if (btn) { btn.disabled = false; btn.textContent = '✓ 上傳並繼續'; }
+        return;
+    }
 
     try {
         const wavBlob = await convertToWav16k(state.recordingBlob);
@@ -1602,6 +1691,9 @@ function _refreshStep2() {
 // ══════════════════════════════════════════════════
 //  HISTORY & SESSIONS
 // ══════════════════════════════════════════════════
+
+
+
 function saveSession() {
     if (!state.article) return;
     const key = `sessions_${state.article.title}`;
@@ -1824,13 +1916,20 @@ async function createNewProject(type) {
         });
     }
     else {
-        // 新增模式防呆：避免重複建立空專案
-        const hasEmpty = Object.values(state.projects).find(p => !p.article);
-        if (hasEmpty) {
-            showToast('請先完成目前的未命名專案');
-            await switchProject(hasEmpty.id);
-            return;
-        }
+        // 💡 新增模式：一律開全新的一張。
+        //    把先前殘留、還沒選文章的空殼專案（article 為空）直接清掉，
+        //    不要再切換過去，避免「按新增卻跳回舊的未命名/複習專案」。
+        Object.values(state.projects)
+            .filter(p => !p.article)
+            .forEach(p => {
+                delete state.projects[p.id];
+                // 順手把該空殼在 localStorage 裡的練習模式紀錄也移除，保持乾淨
+                try {
+                    const map = JSON.parse(localStorage.getItem(PRACTICE_MODE_STORAGE_KEY) || '{}');
+                    delete map[p.id];
+                    localStorage.setItem(PRACTICE_MODE_STORAGE_KEY, JSON.stringify(map));
+                } catch (e) { /* 忽略 */ }
+            });
     }
 
     // 建立新專案資料結構
@@ -1844,6 +1943,7 @@ async function createNewProject(type) {
         // 💡 重錄同一篇文章時延續原本的練習模式；全新專案則預設分段練習
         practiceMode: initialPracticeMode,
         recordings: [],
+        isRetry: (type === 'retry'),
         date: new Date().toLocaleString('zh-TW', { hour12: false })
     };
     // 💡 立即寫入 localStorage，避免建立後、選擇模式前就重新整理分頁而遺失這個設定
@@ -1922,7 +2022,9 @@ async function switchProject(projectId) {
         }
 
         if (state.currentStep === 0) {
-            document.getElementById('chatTitle').textContent = `🔄 複習：${state.article.title}`;
+            const proj = state.projects[projectId];
+            const prefix = (proj && proj.isRetry) ? '🔄 複習：' : '📄 ';
+            document.getElementById('chatTitle').textContent = `${prefix}${state.article.title}`;
             if (previewArea) {
                 previewArea.style.display = 'block';
                 previewArea.classList.add('visible');
@@ -2459,11 +2561,13 @@ function _resizeMaskSlots() {
 
     let size;
     if (isColumn) {
-        // 手機版直向堆疊：不除以張數，每張圖直接盡量佔滿容器寬度，
-        // 超出高度交給 overflow-y:auto 滑動，上限拉高讓圖片明顯變大
-        const availableWidth = rect.width - padLeft - padRight;
-        const maxSize = window.innerWidth <= 480 ? 460 : 520;
-        size = Math.min(availableWidth, maxSize);
+        // 手機版直向堆疊：每張圖大小 = 視窗寬度的一半，夾在 160~300px。
+        // （對應原本 CSS 的 clamp(160px, 50vw, 300px)，因為這裡用 !important 寫死，才是真正生效的地方）
+        // 👉 想改大小就調這三個數字：MIN_SIZE / VW_RATIO / MAX_SIZE
+        const MIN_SIZE = 160;   // 最小邊長(px)
+        const VW_RATIO = 0.60;  // 佔視窗寬度的比例（調小=圖片更小）
+        const MAX_SIZE = 300;   // 最大邊長(px)
+        size = Math.max(MIN_SIZE, Math.min(window.innerWidth * VW_RATIO, MAX_SIZE));
     } else {
         // 桌機版橫向並排：維持原本邏輯
         const availableWidth  = rect.width  - padLeft - padRight  - gap * (slots.length - 1);
@@ -2473,8 +2577,10 @@ function _resizeMaskSlots() {
     if (!isFinite(size) || size < 20) size = 20;
 
     slots.forEach(slot => {
-        slot.style.setProperty('width',  size + 'px', 'important');
-        slot.style.setProperty('height', size + 'px', 'important');
+        slot.style.setProperty('width',      size + 'px', 'important');
+        slot.style.setProperty('height',     size + 'px', 'important');
+        slot.style.setProperty('max-width',  size + 'px', 'important');  /* 👈 新增 */
+        slot.style.setProperty('max-height', size + 'px', 'important');  /* 👈 新增 */
         slot.style.setProperty('flex', '0 0 auto', 'important');
     });
 }
@@ -2548,8 +2654,8 @@ function initMaskBtn() {
         }
 
         maskBtn.classList.toggle('mask-active', window._isMasked);
-        maskBtn.querySelector('.sf-btn-icon').textContent = window._isMasked ? '👁' : '🙈';
-        maskBtn.querySelector('.sf-btn-label').textContent = window._isMasked ? '顯示' : '遮擋';
+        maskBtn.querySelector('.sf-btn-icon').textContent = window._isMasked ? '💬' : '🖼️';
+        maskBtn.querySelector('.sf-btn-label').textContent = window._isMasked ? '文字' : '圖片';
     });
 }
 
@@ -2821,12 +2927,17 @@ function renderWholeReportDirectly(werResult, backendAudioUrl) {
         const werPct = werToAccuracyPercentText(stats.wer_repair_fluency || 0);
         const npvi = (werResult.npvi != null) ? parseFloat(werResult.npvi).toFixed(2) : '0.00';
         const varco = (werResult.varco != null) ? parseFloat(werResult.varco).toFixed(2) : '0.00';
-        const overallFluencyScore = werResult.overall_fluency_score_100 != null ? Math.round(werResult.overall_fluency_score_100) : '—';
+        const overallFluencyScore = werResult.overall_fluency_score_100 != null ? parseFloat(werResult.overall_fluency_score_100) : null;
         const errorCount = alignmentReport.filter(i => (i.Category || i.category) !== 'Match').length;
 
         // 1. 直接改寫總成績卡的兩個數字，不做任何平均運算
         if (document.getElementById('werScoreText')) document.getElementById('werScoreText').innerText = werPct;
-        if (document.getElementById('werFluencyScore100')) document.getElementById('werFluencyScore100').innerText = overallFluencyScore;
+        if (document.getElementById('werFluencyScore100')) {
+            const tierInfo = scoreToFluencyTierLabel(overallFluencyScore);
+            const scoreEl = document.getElementById('werFluencyScore100');
+            scoreEl.innerText = tierInfo ? tierInfo.text : '—';
+            scoreEl.style.color = tierInfo ? tierInfo.color : '';
+        }
 
         const bannerTitle = document.getElementById('scoreBannerTitle');
         if (bannerTitle) bannerTitle.innerHTML = '📊 整篇朗讀流暢度結算看板';
@@ -3469,11 +3580,41 @@ function splitFeedbackIntoSegments(text) {
     return segments.length ? segments : [{ text, lang: 'zh' }];
 }
 
+// 💡 「播放批次代號」：評語是一段一段輪流唸的，每唸完一段會排下一段。
+//    按叉叉／點浮框外／切換分類要停止時，光呼叫 speechSynthesis.cancel() 不夠——
+//    取消當下那段會觸發它的 onend/onerror，反而又排了下一段去唸（叉叉按了還會繼續唸）。
+//    所以用這個遞增代號：一旦停止就把代號 +1，讓任何排程中的下一段自動失效。
+let _feedbackSpeechToken = 0;
+
+function stopChineseFeedback() {
+    _feedbackSpeechToken++;   // 讓任何還在排隊的 speakNext 立刻作廢
+    if (typeof speechSynthesis !== 'undefined') {
+        // 💡 Chrome 在「暫停中」呼叫 cancel() 有時停不乾淨，先 resume 再 cancel 比較保險
+        try { if (speechSynthesis.paused) speechSynthesis.resume(); } catch (e) {}
+        speechSynthesis.cancel();
+    }
+}
+// 💡 曝露到全域，讓 HTML 上任何「關閉視窗／返回」按鈕都能直接呼叫 window.stopChineseFeedback()
+window.stopChineseFeedback = stopChineseFeedback;
+
+/**
+ * 💡 統一的「關閉評語浮框」動作：把浮框藏起來 + 徹底停止朗讀。
+ *    任何關閉入口（浮框叉叉、點浮框外、切換步驟、關閉評分視窗）都走這裡，行為才會一致。
+ */
+function closeCategoryFeedbackPopup() {
+    const popup = document.getElementById('category-feedback-popup');
+    if (popup) popup.style.display = 'none';
+    stopChineseFeedback();
+}
+window.closeCategoryFeedbackPopup = closeCategoryFeedbackPopup;
+
 function speakChineseFeedback(text, onEndCallback) {
     if (!text || !text.trim()) {
         if (onEndCallback) onEndCallback();
         return;
     }
+    // 💡 開一個新的播放批次：先讓先前批次全部作廢，再清掉舊佇列
+    const myToken = ++_feedbackSpeechToken;
     speechSynthesis.cancel();
 
     const segments = splitFeedbackIntoSegments(text);
@@ -3482,6 +3623,9 @@ function speakChineseFeedback(text, onEndCallback) {
 
     let idx = 0;
     function speakNext() {
+        // 💡 若中途被停止（按叉叉/點外面/切換），或又有新的播放開始，
+        //    myToken 就不再是最新的 → 立刻停手，不再唸下一段。
+        if (myToken !== _feedbackSpeechToken) return;
         if (idx >= segments.length) {
             if (onEndCallback) onEndCallback();
             return;
@@ -3501,15 +3645,14 @@ function speakChineseFeedback(text, onEndCallback) {
         }
         utt.pitch = 1;
 
-        utt.onend = () => setTimeout(speakNext, 50);
-        utt.onerror = () => setTimeout(speakNext, 50);
+        // 💡 排下一段前也要確認批次還是最新的，否則被取消時 onend/onerror 會又接著唸
+        utt.onend = () => { if (myToken === _feedbackSpeechToken) setTimeout(speakNext, 50); };
+        utt.onerror = () => { if (myToken === _feedbackSpeechToken) setTimeout(speakNext, 50); };
 
         speechSynthesis.speak(utt);
     }
 
-    // 💡 剛呼叫完 cancel() 別馬上呼叫 speak()，Chrome 在同一瞬間執行這兩個動作
-    //    偶爾會讓語音佇列卡住完全沒有聲音，延遲一點點可以繞開這個問題。
-    setTimeout(speakNext, 60);
+    setTimeout(() => { if (myToken === _feedbackSpeechToken) speakNext(); }, 60);
 }
 
 // ══════════════════════════════════════════════════
@@ -3631,6 +3774,19 @@ document.addEventListener('click', (e) => {
 // ══════════════════════════════════════════════════
 //  📋 點擊「完整度/準確度/流利度」標籤 → 右側浮框顯示該分項 LLM 評語 + TTS
 // ══════════════════════════════════════════════════
+/**
+ * 💡 把 0-10 的流暢度分數換算成「初級/中級/高級」等級文字。
+ *    這個判斷邏輯要跟後端 app.py 的 score_to_fluency_tier() 保持完全一致：
+ *    低於 5 分 = 初級 / 5~8 分 = 中級 / 高於 8 分 = 高級。
+ *    等級完全由分數落在哪個區間反推，後端不會另外存等級欄位。
+ */
+function scoreToFluencyTierLabel(score) {
+    if (score == null || isNaN(score)) return '';
+    if (score < 5) return { text: '初級', color: '#dc2626' };
+    if (score <= 8) return { text: '中級', color: '#d97706' };
+    return { text: '高級', color: '#16a34a' };
+}
+
 function ensureCategoryFeedbackPopup() {
     let popup = document.getElementById('category-feedback-popup');
     if (popup) return popup;
@@ -3661,8 +3817,7 @@ function ensureCategoryFeedbackPopup() {
     const replayIcon = document.getElementById('category-feedback-replay');
 
     closeBtn.onclick = () => {
-        popup.style.display = 'none';
-        speechSynthesis.cancel();
+        closeCategoryFeedbackPopup();   // 💡 按右上角叉叉：關閉浮框 + 徹底停止評語朗讀
     };
     pauseIcon.onclick = () => {
         if (!speechSynthesis.speaking) return;
@@ -3691,14 +3846,25 @@ function ensureCategoryFeedbackPopup() {
         if (popup.style.display === 'none') return;
         if (popup.contains(e.target)) return;
         if (e.target.closest('.category-label-clickable')) return;
-        popup.style.display = 'none';
-        speechSynthesis.cancel();
+        closeCategoryFeedbackPopup();   // 💡 點浮框外關閉時，評語也要一併停止
     });
+
+    // 💡 最強保險：只要這個浮框被「任何方式」隱藏（不管是哪顆關閉/返回按鈕，
+    //    或別的程式把它 display:none），就自動停止朗讀。這樣就算關閉入口不在這支檔案裡，
+    //    只要它讓浮框消失，Ollama 評語也一定會跟著停。
+    let _popupWasVisible = false;
+    new MutationObserver(() => {
+        const visible = popup.style.display !== 'none' && document.body.contains(popup);
+        if (_popupWasVisible && !visible) {
+            stopChineseFeedback();   // 由「顯示」變成「隱藏」的那一刻 → 停止朗讀
+        }
+        _popupWasVisible = visible;
+    }).observe(popup, { attributes: true, attributeFilter: ['style'] });
 
     return popup;
 }
 
-window.showCategoryFeedback = function(title, text, scoreText) {
+window.showCategoryFeedback = function(title, text, scoreText, scoreColor) {
     const popup = ensureCategoryFeedbackPopup();
     document.getElementById('category-feedback-title').textContent = title;
     document.getElementById('category-feedback-text').textContent = text && text.trim() ? text : '（這個面向目前沒有回饋內容）';
@@ -3709,6 +3875,7 @@ window.showCategoryFeedback = function(title, text, scoreText) {
     if (scoreEl) {
         if (scoreText) {
             scoreEl.textContent = scoreText;
+            scoreEl.style.background = scoreColor || '#64748b';  // 💡 有等級顏色就用等級色，沒有就用預設灰色
             scoreEl.style.display = 'inline-block';
         } else {
             scoreEl.style.display = 'none';
@@ -3735,11 +3902,15 @@ window.openCategoryFeedbackForStrip = function(stripId, category) {
     const widget = document.getElementById(`${stripId}-chunkwidget`);
     if (!widget) return;
 
+    const fluencyScoreNum = widget.dataset.fluencyScore100 ? parseFloat(widget.dataset.fluencyScore100) : null;
+    const fluencyTier = scoreToFluencyTierLabel(fluencyScoreNum);
+
     const map = {
         fluency: {
             title: '🎯 口語流暢度評語',
             text: widget.dataset.fluencyFeedback || '',
-            score: widget.dataset.fluencyScore100 ? `${Math.round(parseFloat(widget.dataset.fluencyScore100))}/100` : '',
+            score: fluencyTier ? fluencyTier.text : '',
+            scoreColor: fluencyTier ? fluencyTier.color : null,
             filterCategory: 'fluency'   // 💡 口語流暢度：沿用句子層級的黃/紅標色 + 跳轉
         },
         completeness: {
@@ -3766,7 +3937,7 @@ window.openCategoryFeedbackForStrip = function(stripId, category) {
 
     // 💡 先觸發標色/跳轉（準確度傳 null，代表清掉標色只顯示原本樣式），再打開評語浮框
     window.switchWerFilterChunked(null, item.filterCategory, stripId);
-    window.showCategoryFeedback(item.title, item.text, item.score);
+    window.showCategoryFeedback(item.title, item.text, item.score, item.scoreColor);
 };
 
 /**
@@ -3897,8 +4068,10 @@ function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl, w
                 🎵 錄音回放
             </div>
 
-            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom: 10px;">
-                <button id="${stripId}-playbtn" type="button" style="padding:6px 16px; border:none; background:#e63946; color:#fff; border-radius:20px; font-weight:bold; cursor:pointer; font-size:0.85rem; white-space:nowrap;">▶ 播放</button>
+            <div style="display:flex; flex-direction:column; gap:10px; margin-bottom: 10px;">
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                    <button id="${stripId}-playbtn" type="button" style="padding:6px 16px; border:none; background:#e63946; color:#fff; border-radius:20px; font-weight:bold; cursor:pointer; font-size:0.85rem; white-space:nowrap;">▶ 播放</button>
+                
 
                 <!-- 💡 整篇模式專用：跳到上一段/下一段開頭，方便在整篇錄音裡快速定位到原本文章的段落分界。
                      沒有段落分界資料時（分段模式）JS 會自動隱藏這個按鈕組。 -->
@@ -3908,7 +4081,10 @@ function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl, w
                     <span onclick="window.navToParagraph('${stripId}', 1)" title="下一段開頭" style="cursor:pointer; font-size:1rem; color:#475569; font-weight:bold; user-select:none;">⏭</span>
                 </div>
 
-                <div style="width:1px; height:22px; background:#e2e8f0; margin: 0 4px;"></div>
+                </div>
+                <!-- 第二列：四個指標按鈕（桌面一排、手機 2×2；由 .metric-chip-grid 控制） -->
+                <div class="metric-chip-grid" style="display:flex; flex-wrap:wrap; gap:8px;">
+                <!-- 💡 發音完整度 ... -->
 
                 <!-- 💡 發音完整度：底層的刪除/插入/替換按鈕隱藏起來（不對外呈現計分細節），
                      標籤點擊後會一次觸發「刪除+插入+替換」三種錯誤的標色與跳轉，同時顯示 LLM 評語+TTS。 -->
@@ -3937,7 +4113,7 @@ function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl, w
                     </div>
                 </div>
 
-                <div style="width:1px; height:22px; background:#e2e8f0; margin: 0 4px;"></div>
+                
 
                 <!-- 💡 口語流暢度：底層的「流暢度」按鈕隱藏起來，標籤點擊後觸發句子層級標色/跳轉 + LLM 評語+TTS。 -->
                 <div style="border:2px solid #9333ea; border-radius:10px; padding:6px 14px; background:#faf5ff;">
@@ -3945,6 +4121,7 @@ function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl, w
                     <div style="display:none;">
                         <button class="wer-filter-btn-chunked" data-original-bg="#fff" data-original-color="#9333ea" onclick="window.switchWerFilterChunked(this, 'fluency', '${stripId}')" style="padding: 5px 12px; border:none; background: #fff; color: #9333ea; border-radius: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size:0.85rem;">流暢度 (${fluencyFlaggedCount})</button>
                     </div>
+                </div>
                 </div>
             </div>
 
@@ -4425,9 +4602,12 @@ function renderMultipleParagraphsReport(paragraphList, globalStats, mode = 'segm
                 effectiveGlobalStats ? werToAccuracyPercentText(effectiveGlobalStats.wer_average) : '0.0%';
         }
         if (document.getElementById('werFluencyScore100')) {
-            document.getElementById('werFluencyScore100').innerText =
-                (effectiveGlobalStats && effectiveGlobalStats.overall_fluency_score_100 != null)
-                    ? Math.round(effectiveGlobalStats.overall_fluency_score_100) : '—';
+            const rawScore = (effectiveGlobalStats && effectiveGlobalStats.overall_fluency_score_100 != null)
+                ? parseFloat(effectiveGlobalStats.overall_fluency_score_100) : null;
+            const tierInfo = scoreToFluencyTierLabel(rawScore);
+            const scoreEl = document.getElementById('werFluencyScore100');
+            scoreEl.innerText = tierInfo ? tierInfo.text : '—';
+            scoreEl.style.color = tierInfo ? tierInfo.color : '';
         }
 
         // 💡 順手把標題文字也改一下，whole 模式不叫「Total 平均」
@@ -4644,18 +4824,7 @@ function renderMultipleParagraphsReport(paragraphList, globalStats, mode = 'segm
             }
         });
 
-        // 💡 新增：報告最下方加一個「反覆練習」按鈕，功能跟左上角轉圈箭頭的複習按鈕一致
-        //    （直接呼叫同一個 createNewProject('retry')），用同一篇文章的內容重新開始一次新的練習。
-        if (typeof createNewProject === 'function') {
-            const retryWrap = document.createElement('div');
-            retryWrap.style.cssText = 'width:100%; display:flex; justify-content:center; margin-top:20px; padding-top:16px; border-top:1px solid #e2e8f0;';
-            retryWrap.innerHTML = `
-                <button type="button" onclick="createNewProject('retry')" style="display:flex; align-items:center; gap:8px; padding:10px 24px; border:none; background:#2563eb; color:#fff; border-radius:24px; font-weight:bold; font-size:0.9rem; cursor:pointer; box-shadow:0 2px 8px rgba(37,99,235,0.3);">
-                    <span style="font-size:1.1rem;">🔄</span> 反覆練習這篇文章
-                </button>
-            `;
-            container.appendChild(retryWrap);
-        }
+       
 
     } catch (err) {
         console.error("❌ 渲染歷史大禮包手風琴失敗:", err);
@@ -4804,3 +4973,146 @@ function displayProjectsInSidebar(projects) {
         historyList.appendChild(li);
     });
 }
+
+/* ══════════════════════════════════════════════════
+   📱 手機版：錄音完成顯示波形後，長按錄音區塊上緣邊界即可拖曳「往上蓋住文字」
+   ──────────────────────────────────────────────────
+   - 觸發條件：手機寬度 (<=768px) 且波形已顯示 (#playbackRow.visible)
+   - 長按把手 ~320ms 啟動，接著同一根手指往上拖 = 覆蓋層變高（蓋住下方文字）
+   - 錄音區塊改為絕對定位的覆蓋層，字幕區高度被凍結、不擠壓
+   - 最高可蓋滿整個錄音內容區塊 (.record-main)；最低為初始高度
+   - 「全部重錄」等任何讓波形收起的動作（會呼叫 resetRecordUI 移除 #playbackRow 的
+     visible class）都會自動還原成初始狀態
+   ══════════════════════════════════════════════════ */
+document.addEventListener('DOMContentLoaded', () => {
+    const MOBILE_MAX  = 768;
+    const MOVE_START  = 6;     // 在把手上滑動超過此距離(px)就立刻啟動調整（不需長按）
+
+    const controls      = document.querySelector('.record-controls');
+    const recordMain    = document.querySelector('.record-main');
+    const recordSec     = document.getElementById('recordSection');
+    const handle        = document.getElementById('recordResizeHandle');
+    const playbackRow   = document.getElementById('playbackRow');
+    const lyricsWrapper = document.getElementById('lyricsWrapper');
+    if (!controls || !recordMain || !recordSec || !handle || !playbackRow) return;
+
+    const isMobile    = () => window.innerWidth <= MOBILE_MAX;
+    const waveVisible = () => playbackRow.classList.contains('visible');
+
+    let armed     = false;   // 已啟動、正在調整中
+    let pointerId = null;
+    let downY = 0, downX = 0, lastY = 0, startY = 0, startH = 0;
+
+    // 還原成初始狀態（清掉覆蓋層高度、解除字幕凍結）
+    function resetHeight() {
+        controls.style.height = '';
+        controls.classList.remove('rc-overlay');
+        recordMain.classList.remove('rc-resizing');
+        if (lyricsWrapper) lyricsWrapper.style.flex = '';   // 解除字幕高度凍結
+    }
+
+    // 依「手機 + 波形顯示中」切換把手；一旦離開此狀態就還原初始高度
+    function syncHandle() {
+        const on = isMobile() && waveVisible();
+        recordSec.classList.toggle('rc-resizable', on);
+        if (on) {
+            // 尚未進入覆蓋模式時，記錄目前自然高度，作為最小值 / 還原基準（即「初始高度」）
+            if (!controls.classList.contains('rc-overlay')) {
+                controls._naturalH = controls.offsetHeight;
+            }
+        } else {
+            resetHeight();
+            controls._naturalH = 0;
+        }
+    }
+
+    function clampHeight(h) {
+        const min = controls._naturalH || controls.offsetHeight;
+        // 最高只到「內容全部展開」的高度（所有按鈕都顯示、剛好不用捲），避免多出空白；
+        // 同時不超過整個錄音區塊的高度。
+        const full = controls._fullH || recordMain.clientHeight;
+        const max  = Math.max(min, Math.min(full, recordMain.clientHeight));
+        return Math.min(max, Math.max(min, h));
+    }
+
+    // 長按門檻到了 → 正式進入「覆蓋」調整模式
+    function arm() {
+        armed  = true;
+        startY = lastY;                       // 以長按當下的手指位置為基準，避免拖曳一開始跳動
+        startH = controls.offsetHeight;       // 目前（初始）高度
+        if (!controls._naturalH) controls._naturalH = startH;
+
+        // 💡 先凍結字幕區目前高度，讓它在錄音區塊變成覆蓋層後不會重排/被擠壓
+        if (lyricsWrapper) {
+            lyricsWrapper.style.flex = '0 0 ' + lyricsWrapper.offsetHeight + 'px';
+        }
+        // 錄音區塊改成絕對定位的覆蓋層，並先固定在初始高度（外觀不變，只是脫離文件流）
+        recordMain.classList.add('rc-resizing');   // 讓 .record-main 成為定位基準
+        controls.classList.add('rc-overlay');
+        // 💡 量測「內容全部展開」需要的高度（所有錄音按鈕都露出、剛好不用捲）當作拉高上限，
+        //    此時還沒設固定高度、max-height:none，scrollHeight 就是完整內容高度。
+        controls._fullH = controls.scrollHeight;
+        controls.style.height = startH + 'px';
+
+        handle.classList.add('active');
+        document.body.style.userSelect = 'none';
+        if (navigator.vibrate) { try { navigator.vibrate(15); } catch (e) {} }
+    }
+
+    function endDrag() {
+        armed = false;
+        handle.classList.remove('active');
+        document.body.style.userSelect = '';
+        if (pointerId != null) { try { handle.releasePointerCapture(pointerId); } catch (e) {} }
+        pointerId = null;
+    }
+
+    handle.addEventListener('pointerdown', (e) => {
+        if (!isMobile() || !waveVisible()) return;
+        pointerId = e.pointerId;
+        downY = lastY = startY = e.clientY;
+        downX = e.clientX;
+        startH = controls.offsetHeight;
+        if (!controls._naturalH) controls._naturalH = startH;
+        try { handle.setPointerCapture(pointerId); } catch (err) {}
+        // 不再等長按：改成在下面 pointermove 一滑動就啟動
+    });
+
+    handle.addEventListener('pointermove', (e) => {
+        if (pointerId == null) return;
+        lastY = e.clientY;
+        if (!armed) {
+            // 💡 在把手上滑動超過小門檻 → 立刻啟動調整（滑動即啟動，免長按）
+            if (Math.abs(e.clientY - downY) > MOVE_START ||
+                Math.abs(e.clientX - downX) > MOVE_START) {
+                arm();
+            } else {
+                return;
+            }
+        }
+        e.preventDefault();
+        const delta = startY - e.clientY;                    // 往上拖 → delta 為正 → 變高
+        controls.style.height = clampHeight(startH + delta) + 'px';
+    }, { passive: false });
+
+    handle.addEventListener('pointerup',          endDrag);
+    handle.addEventListener('pointercancel',      endDrag);
+    handle.addEventListener('lostpointercapture', endDrag);
+
+    // 波形顯示/收起（含「全部重錄」呼叫的 resetRecordUI）都會改動 #playbackRow 的 class，
+    // 這裡監看它 → 自動顯示/隱藏把手，並在收起時還原初始狀態
+    new MutationObserver(syncHandle).observe(playbackRow, {
+        attributes: true, attributeFilter: ['class']
+    });
+
+    // 視窗尺寸變化：回到桌面版就還原；仍在手機版則重新夾住高度避免超界
+    window.addEventListener('resize', () => {
+        if (!isMobile()) resetHeight();
+        syncHandle();
+        if (controls.classList.contains('rc-overlay') && controls.style.height) {
+            controls.style.height = clampHeight(parseFloat(controls.style.height)) + 'px';
+        }
+    });
+
+    syncHandle();
+});

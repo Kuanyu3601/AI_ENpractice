@@ -116,8 +116,8 @@
                 <h3>練習紀錄</h3>
             </div>
             <div class="plus-dropdown">
-                    <button onclick="createNewProject('new')">+</button>
-                    <button id="retryCurrentBtn" onclick="createNewProject('retry')">🔄</button>
+                    <button onclick="createNewProject('new')" data-tip="新增文章">+</button>
+                    <button id="retryCurrentBtn" onclick="createNewProject('retry')" data-tip="重新練習這篇">🔄</button>
             </div>
         </div>
         <ul class="history-list" id="historyList">
@@ -218,25 +218,28 @@
             <!-- ── Step 2: Recording ── -->
             <div class="step-panel" id="panel-1">
                 <div class="record-section" id="recordSection">
-                    <div class="para-sidebar" id="paraSidebar">
-                        <div class="paragraph-progress" id="paragraphProgress">段落 1 / 4</div>
+                    <div class="mobile-controls-row" id="mobileControlsRow">
+                        <div class="para-sidebar" id="paraSidebar">
+                            <div class="paragraph-progress" id="paragraphProgress">段落 1 / 4</div>
 
-                        <div class="para-overview-strip" id="paraOverviewStrip"></div>
+                            <div class="para-overview-strip" id="paraOverviewStrip"></div>
+                        </div>
+                        <!-- 💡 手機版：JS 會把下方 #function（朗讀/遮擋按鈕）搬移到這一排，跟段落按鈕並排顯示 -->
                     </div>
 
 
                     <div class="record-content">
                         <div class="record-main">
-                            <div class="lyrics-wrapper">
+                            <div class="lyrics-wrapper" id="lyricsWrapper">
                                 <div class="select-function" id="function">
                                     <div class="sf-btn-group">
-                                        <button class="sf-btn" id="ttsBtn" title="朗讀當前段落">
+                                        <button class="sf-btn" id="ttsBtn" title="朗讀當前段落" data-tip="朗讀當前段落">
                                             <span class="sf-btn-icon">🔊</span>
                                             <span class="sf-btn-label">朗讀</span>
                                         </button>
-                                        <button class="sf-btn" id="maskBtn" title="遮擋字幕">
-                                            <span class="sf-btn-icon">🙈</span>
-                                            <span class="sf-btn-label">遮擋</span>
+                                        <button class="sf-btn" id="maskBtn" title="遮擋字幕" data-tip="關閉字幕，顯示圖片提示">
+                                            <span class="sf-btn-icon">🖼️</span>
+                                            <span class="sf-btn-label">圖片</span>
                                         </button>
                                     </div>
 
@@ -246,7 +249,7 @@
                                 <div class="lyrics-view" id="lyricsView"></div>
 
                                 <!-- 遮擋後顯示的圖片區（三張正方形） -->
-                                <div class="mask-image-area" id="maskImageArea">
+                                <div class="mask-image-area" id="maskImageArea" data-tip="點擊翻面，提供文字提示" >
                                     <div class="mask-img-slot" id="maskSlot0"></div>
                                     <div class="mask-img-slot" id="maskSlot1"></div>
                                     <div class="mask-img-slot" id="maskSlot2"></div>
@@ -254,9 +257,13 @@
                             </div>
 
                             <div class="record-controls">
+                                <!-- 📱 手機版：錄音完成顯示波形後，長按此邊界即可上下拖曳調整錄音區塊高度 -->
+                                <div class="record-resize-handle" id="recordResizeHandle" title="長按可調整錄音區高度">
+                                    <span class="rrh-grip"></span>
+                                </div>
                                 <div class="timer-display" id="recordTimer">00:00</div>
 
-                                <div class="record-btn-row" style="display: flex; gap: 12px; justify-content: center; align-items: center; margin-bottom: 20px;">
+                                <div class="record-btn-row" style="display: flex; gap: 12px; justify-content: center; align-items: center;">
                                     <button class="record-btn" id="recordBtn">
                                         <span class="record-dot-anim"></span>
                                         <span id="recordBtnText">開始錄音</span>
@@ -313,7 +320,7 @@
                             </div>
 
                             <div style="background: white; padding: 20px 24px; border-radius: 10px; border: 1px solid #bfdbfe; flex: 1; min-width: 200px; max-width: 320px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
-                                <span style="color: #666; font-size: 0.85rem; display: block;">流暢度綜合評分 (0-100)</span>
+                                <span style="color: #666; font-size: 0.85rem; display: block;">流暢度綜合評分 <br> (0-100)</span>
                                 <strong id="werFluencyScore100" style="color: #2563eb; font-size: 2.4rem; display: block; margin-top: 8px; font-weight: bold;">—</strong>
                             </div>
                         </div>
@@ -331,7 +338,15 @@
                         </div>
                     </div>
 
+                    
+
                 </div>
+
+                <div class="retry-practice-wrap">
+                        <button class="retry-practice-btn" onclick="createNewProject('retry')">
+                            🔄 重新練習
+                        </button>
+                    </div>
             </div>
         </div><!-- end .step-content -->
     </main>
