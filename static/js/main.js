@@ -1463,7 +1463,7 @@ function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl, w
 
             <div style="display:flex; flex-direction:column; gap:10px; margin-bottom: 10px;">
                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                    <button id="${stripId}-playbtn" type="button" style="padding:6px 16px; border:none; background:#e63946; color:#fff; border-radius:20px; font-weight:bold; cursor:pointer; font-size:0.85rem; white-space:nowrap;">▶ 播放</button>
+                    <button id="${stripId}-playbtn" type="button" style="padding:6px 16px; border:none; background:#3a85cb; color:#fff; border-radius:20px; font-weight:bold; cursor:pointer; font-size:0.85rem; white-space:nowrap;">▶ 播放</button>
                 
 
                 <!-- 💡 整篇模式專用：跳到上一段/下一段開頭，方便在整篇錄音裡快速定位到原本文章的段落分界。
@@ -1481,8 +1481,8 @@ function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl, w
 
                 <!-- 💡 發音完整度：底層的刪除/插入/替換按鈕隱藏起來（不對外呈現計分細節），
                      標籤點擊後會一次觸發「刪除+插入+替換」三種錯誤的標色與跳轉，同時顯示 LLM 評語+TTS。 -->
-                <div style="border:2px solid #16a34a; border-radius:10px; padding:6px 14px; background:#f0fdf4;">
-                    <span class="category-label-clickable" onclick="window.openCategoryFeedbackForStrip('${stripId}','completeness')" style="font-size:0.85rem; font-weight:bold; color:#16a34a; text-align:center; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:2px; flex-wrap:wrap;">發音完整度<span style="font-size:0.7rem; font-weight:normal;">(${completenessErrCount}/${totalRefWords})</span><span style="font-size:0.7rem;">👆</span></span>
+                <div style="border:2px solid #d97706; border-radius:10px; padding:6px 14px; background:#fffbeb;">
+                    <span class="category-label-clickable" onclick="window.openCategoryFeedbackForStrip('${stripId}','completeness')" style="font-size:0.85rem; font-weight:bold; color:#d97706; text-align:center; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:2px; flex-wrap:wrap;">發音完整度<span style="font-size:0.7rem; font-weight:normal;">(${completenessErrCount}/${totalRefWords})</span><span style="font-size:0.7rem;">👆</span></span>
                     <div style="display:none;">
                         <button class="wer-filter-btn-chunked" data-original-bg="#fff" data-original-color="#16a34a" onclick="window.switchWerFilterChunked(this, 'deletions', '${stripId}')" style="padding: 5px 12px; border:none; background: #fff; color: #16a34a; border-radius: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size:0.85rem;">刪除 (${errorCounts.deletions})</button>
                         <button class="wer-filter-btn-chunked" data-original-bg="#fff" data-original-color="#16a34a" onclick="window.switchWerFilterChunked(this, 'insertions', '${stripId}')" style="padding: 5px 12px; border:none; background: #fff; color: #16a34a; border-radius: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size:0.85rem;">插入 (${errorCounts.insertions})</button>
@@ -1491,8 +1491,8 @@ function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl, w
                 </div>
 
                 <!-- 💡 發音準確度：不做任何文字標色/跳轉，純粹只顯示 LLM 評語 + TTS -->
-                <div style="border:2px solid #2563eb; border-radius:10px; padding:6px 14px; background:#eff6ff;">
-                    <span class="category-label-clickable" onclick="window.openCategoryFeedbackForStrip('${stripId}','accuracy')" style="font-size:0.85rem; font-weight:bold; color:#2563eb; text-align:center; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:2px; flex-wrap:wrap;">發音準確度<span style="font-size:0.7rem; font-weight:normal;">(${accuracyErrCount}/${totalRefWords})</span><span style="font-size:0.7rem;">👆</span></span>
+                <div style="border:2px solid #d97706; border-radius:10px; padding:6px 14px; background:#fffbeb;">
+                    <span class="category-label-clickable" onclick="window.openCategoryFeedbackForStrip('${stripId}','accuracy')" style="font-size:0.85rem; font-weight:bold; color:#d97706; text-align:center; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:2px; flex-wrap:wrap;">發音準確度<span style="font-size:0.7rem; font-weight:normal;">(${accuracyErrCount}/${totalRefWords})</span><span style="font-size:0.7rem;">👆</span></span>
                 </div>
 
                 <!-- 💡 口說流利度：底層的重複/嘗試修正/重新開始按鈕隱藏起來，
