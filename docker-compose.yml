@@ -3,6 +3,9 @@ services:
     build: .
     ports:
       - "5001:5000"
+    environment:
+    # 👇 新增:告訴 Flask 去「主機上原生的 Ollama」找服務(Mac 才吃得到 GPU)
+    - OLLAMA_BASE_URL=http://host.docker.internal:11434
     volumes:
       - .:/app
       - ./kids_recordings:/app/kids_recordings
@@ -65,22 +68,6 @@ services:
       PMA_USER: root
       PMA_PASSWORD: yourpassword
 
-  ollama:
-    image: ollama/ollama:latest
-    container_name: ollama
-    restart: always
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
-    # 💡 只有這一段是新加的：告訴 Docker 這個服務要用 GPU
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1              # 用 1 張顯卡；如果你有多張、想全部給它用，改成 all
-              capabilities: [gpu]
 
 volumes:
   mysql_data:
