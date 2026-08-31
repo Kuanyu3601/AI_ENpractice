@@ -604,9 +604,11 @@ def call_ollama_fluency_feedback(sentence_fluency_list):
 
 請寫一段給小朋友看的整體回饋，規則非常重要、請務必遵守：
 
-1. 【語言規則】整段回饋只能使用「繁體中文」。除了要引用課文原句時可以保留英文原文以外，
-   所有的說明、形容、建議文字都必須是中文，絕對不可以出現任何一句完整的英文句子當作說明或建議
-   （例如不可以寫出像 "focus on keeping a steady pace..." 這種英文句子）。
+1. 【語言規則，非常重要】整段回饋只能使用「繁體中文」。除了要引用課文原句（用引號包起來的那句）
+   可以保留英文原文以外，其餘所有文字都不可以出現「任何英文」——不管是完整的英文句子，
+   還是只有一個單字夾在中文句子裡（例如絕對不可以寫成「這樣聽起來會更 flowing」「更 smooth」
+   這種中英夾雜的寫法，這是嚴重錯誤，一定要避免）。想表達的意思一律換成中文詞彙，
+   例如「更順暢」「更流暢」，不要使用任何英文單字替代。
 
 2. 【一定要引用原句】如果上面有提到「這次問題最明顯的一句話」，你「一定要」用「句子『英文原句』」
    這種格式，把那句英文原文完整地包在引號裡講出來，明確指出是哪一句話出了問題，不能只用抽象的說法帶過。
@@ -765,51 +767,118 @@ def call_ollama_word_pronunciation_tip(reference_word, hypothesis_word, category
         return ""
 
 
+def score_to_fluency_tier(score):
+    """
+    💡 共用小工具：把流暢度分數換算回等級數字（1=不流暢 / 2=待加強 / 3=流暢，對應前端顯示文字）。
+       💡 尺度是 0-10 分，對應規則：
+       - 低於 5 分：不流暢
+       - 5 分到 8 分之間：待加強
+       - 高於 8 分：流暢
+       等級完全用「分數落在哪個區間」反推，前端 JS（scoreToFluencyTierLabel）
+       要套用同一套規則，兩邊保持一致。
+    """
+    if score is None:
+        return None
+    if score < 5:
+        return 1  # 不流暢
+    elif score <= 8:
+        return 2  # 待加強
+    else:
+        return 3  # 流暢
+
+
 def call_ollama_score_overall_fluency(npvi_value, varco_value):
     """
-    💡 【核心新增】：把這次朗讀實際的 nPVI / Varco 數值，連同標準值±標準差一起丟給 Ollama，
-       請它綜合判斷「整體朗讀流暢度」，給一個 0 到 100 的分數。
+    💡 把這次朗讀實際的 nPVI / Varco 數值，連同「法國英語學習者三個程度」的文獻門檻
+       一起丟給 Ollama，請它綜合比對，給一個 0 到 10 分的分數，
+       同時請它「在同一次呼叫裡」順便說明評分依據（為什麼是這個分數），
+       用一段繁體中文文字回傳，存進資料庫的 fluency_score_reason 欄位。
 
-       跟前面 4 維度雷達圖評分不同：這裡不是看錯誤次數，是專門針對「節奏穩定度」
-       (nPVI) 跟「語速變異程度」(Varco) 這兩個聲學指標，判斷有沒有落在正常朗讀者
-       該有的範圍內，綜合給一個容易理解的總分，取代原本「一堆數字看不懂」的呈現方式。
+       跟之前的設計不同：這次「等級」完全不在後端決定，Ollama 只負責給分數，
+       分數存進資料庫的 fluency_score_100 欄位（沿用舊欄位名稱，但範圍已改成 0-10），
+       前端 JS 收到分數後，自己套用「<5初級 / 5-8中級 / >8高級」的規則去顯示對應等級文字。
+
+       ⚠️ 單位換算注意：資料庫裡的 npvi_value/varco_value 是 raw*100 的尺度（例如平均值56.22），
+       但論文原始數字是 0-1 尺度（例如0.5719），所以這裡丟進 prompt 前，
+       文獻參考數字要先乘以 100，統一成跟 npvi_value/varco_value 一樣的尺度，
+       不然 Ollama 拿不同尺度的數字互相比較會比錯。
 
     參數：
         npvi_value: 實際的 nPVI (syl) 分數，尺度跟資料庫一致（已經是 raw*100 的數字）
         varco_value: 實際的 Varco (syl) 分數，同上
 
     回傳：
-        0~100 的浮點數；Ollama 呼叫失敗時回傳 0.0
+        (score, reason) 的 tuple：
+        score 是 0~10 的浮點數；Ollama 呼叫失敗時回傳 0.0
+        reason 是一段繁體中文的評分依據說明；失敗時回傳空字串
     """
-    prompt = f"""你是一位語音學專家，專門評估英語朗讀的流暢度。
+    npvi_low = round(NPVI_SYL_MEAN - NPVI_SYL_STD, 2)
+    npvi_high = round(NPVI_SYL_MEAN + NPVI_SYL_STD, 2)
+    varco_low = round(VARCO_SYL_MEAN - VARCO_SYL_STD, 2)
+    varco_high = round(VARCO_SYL_MEAN + VARCO_SYL_STD, 2)
+
+    # 💡 法國學習者三個程度的文獻數值，原始是 0-1 尺度，這裡乘以 100 統一成跟
+    #    npvi_value/varco_value 一樣的尺度，避免 Ollama 拿不同單位的數字互相比較。
+    fr_beginner_npvi, fr_beginner_varco = 57.19, 43.03
+    fr_intermediate_npvi, fr_intermediate_varco = 62.11, 47.66
+    fr_advanced_npvi, fr_advanced_varco = 63.62, 50.24
+
+    prompt = f"""你是一位語音學專家，專門評估英語朗讀的流暢度，總分是 10 分。
 
 nPVI (正規化成對變異指數) 衡量朗讀節奏的規律性，Varco 衡量語速的變異程度。
-以下是根據大量標準朗讀樣本統計出來的「正常範圍」（平均值 ± 標準差）：
+數值越接近「熟練朗讀者」該有的節奏與語速控制，代表流暢度越好。
 
-- nPVI 標準範圍：{NPVI_SYL_MEAN} ± {NPVI_SYL_STD}（也就是 {round(NPVI_SYL_MEAN - NPVI_SYL_STD, 2)} 到 {round(NPVI_SYL_MEAN + NPVI_SYL_STD, 2)} 之間算正常）
-- Varco 標準範圍：{VARCO_SYL_MEAN} ± {VARCO_SYL_STD}（也就是 {round(VARCO_SYL_MEAN - VARCO_SYL_STD, 2)} 到 {round(VARCO_SYL_MEAN + VARCO_SYL_STD, 2)} 之間算正常）
+【評分量表】：總分 10 分，分數對應三個程度：
+- 低於 5 分：初級
+- 5 分到 8 分之間：中級
+- 高於 8 分：高級
+
+【文獻參考門檻】：學術文獻中，法語系英語學習者（L2 English learners）在三個程度下，
+nPVI-S / VarcoS 的平均值如下（已經換算成跟下面「實測值」相同的尺度）：
+- 初級：nPVI ≈ {fr_beginner_npvi}，Varco ≈ {fr_beginner_varco}
+- 中級：nPVI ≈ {fr_intermediate_npvi}，Varco ≈ {fr_intermediate_varco}
+- 高級：nPVI ≈ {fr_advanced_npvi}，Varco ≈ {fr_advanced_varco}
+
+請以這三組數值當作評分的主要依據：實測值越接近或超過「高級」這組數值，分數應該越高
+（可以超過 8 分）；越接近「初級」這組數值甚至更低，分數應該越低（低於 5 分）；
+落在中級附近，給 5～8 分之間。
+
+【我們自己的門檻，供你參考比對】（平均值 ± 1 個標準差，取自我們自己蒐集的標準朗讀樣本統計）：
+- nPVI 標準範圍：{npvi_low} 到 {npvi_high}
+- Varco 標準範圍：{varco_low} 到 {varco_high}
+這個範圍橫跨了上面文獻裡初級到高級的區間，你可以參考這個範圍去判斷實測值大概落在
+文獻的哪個程度區間附近，但主要評分依據還是以上面文獻的三組數值比對為主。
 
 這位學生這次朗讀的實際數值：
 - nPVI 實測值：{npvi_value}
 - Varco 實測值：{varco_value}
 
-請根據這兩個數值偏離標準範圍的程度，綜合評估整體朗讀流暢度，給一個 0 到 100 的整數分數
-（100 分代表完全落在標準範圍內、非常流暢；分數隨著偏離程度增加而遞減；0 分代表嚴重偏離）。
+請綜合 nPVI 跟 Varco 兩項數值跟上面三組文獻門檻的比對結果，給一個 0 到 10 分（可以有小數點一位）
+的整體流暢度分數，同時寫一段簡短的評分依據說明，規則如下：
+
+1. 【語言規則】評分依據說明只能使用「繁體中文」，不可以出現任何英文單字或句子。
+2. 【內容】具體講出這個分數是怎麼來的——例如 nPVI/Varco 各自比較接近文獻裡哪個程度、
+   哪一項數值是主要影響分數高低的關鍵，用口語化的方式描述，不要只丟數字。
+3. 【長度】大約 1 到 2 句話，簡潔一點。
+4. 【語氣】客觀、專業，像是評分紀錄的簡短備註，不用特別鼓勵或安慰的語氣（這是給老師/系統
+   查看評分依據用的，不是給小朋友看的鼓勵話）。
 
 請「只」回傳一個 JSON 物件，不要有任何其他文字說明或 markdown 標記，格式如下：
-{{"fluency_score": 0}}
+{{"fluency_score": 0.0, "score_reason": "這裡放評分依據說明"}}
 """
 
     result = _call_ollama(prompt)
     if not result:
-        return 0.0
+        return 0.0, ""
 
     try:
-        score = float(result.get("fluency_score", 0))
-        return round(max(0.0, min(100.0, score)), 1)
+        score = float(result.get("fluency_score", 0.0))
+        score = max(0.0, min(10.0, score))  # 保險：不管 Ollama 給了什麼，強制夾在 0-10 分範圍內
+        reason = str(result.get("score_reason", "")).strip()
+        return round(score, 1), reason
     except (TypeError, ValueError) as e:
         print(f"🚨 Ollama 整體流暢度評分格式異常: {e}, 原始回傳: {result}", flush=True)
-        return 0.0
+        return 0.0, ""
 
 
 # --- 3. 基礎路由 (頁面跳轉) ---
@@ -1038,12 +1107,6 @@ def upload_audio():
         word_timings = []
         pause_count = 0
 
-        # 💡 新增：四個 Ollama 評分維度，先給預設值 0.0，避免呼叫失敗時整支 API 崩潰
-        score_completeness = 0.0
-        score_accuracy = 0.0
-        score_fluency = 0.0
-        score_grammar = 0.0
-
         try:
             set_upload_progress(progress_id, '正在進行語音辨識與詞錯誤率分析...')
             wer_files = {'audio_file': (filename, audio_bytes, 'audio/wav')}
@@ -1058,6 +1121,42 @@ def upload_audio():
                 wer_stats = full_wer_raw_json.get("statistics", {}) or {}
                 alignment_report = full_wer_raw_json.get("alignment_report", [])
                 error_count = sum(1 for item in alignment_report if item.get("Category") != "Match")
+
+                # 🛡️ 【核心新增】防呆檢查：如果幾乎沒有偵測到使用者念出課文內容
+                #   （沒說話、說話內容跟課文完全不符、錄音太短等），nPVI/Varco 這兩個統計指標
+                #   在「字數太少」的情況下數學上會失真、容易算出異常偏高的數字
+                #   （字數越少，統計上的變異量越不穩定，往回比對文獻門檻反而容易誤判成「流暢/高級」）。
+                #   這裡直接擋下來，不繼續往下呼叫 NPVI API、也不寫進資料庫，
+                #   請使用者重新錄音，確保有完整念出課文內容。
+                matched_word_count = sum(1 for item in alignment_report if item.get("Category") == "Match")
+                ref_word_count_for_check = int(wer_stats.get("total_ref_words", 0)) or len(original_text.split())
+
+                MIN_MATCHED_WORDS = 3       # 至少要對到 3 個字，太少的話統計上完全不可靠
+                MIN_MATCH_RATIO = 0.3       # 或至少要對到原文 30% 的內容
+
+                is_insufficient_speech = (
+                    matched_word_count < MIN_MATCHED_WORDS
+                    or (ref_word_count_for_check > 0 and matched_word_count / ref_word_count_for_check < MIN_MATCH_RATIO)
+                )
+
+                if is_insufficient_speech:
+                    print(f"🚨 偵測到錄音內容過少/不符：對到 {matched_word_count}/{ref_word_count_for_check} 個字，拒絕本次上傳", flush=True)
+                    cursor.close()
+                    conn.close()
+                    clear_upload_progress(progress_id)
+                    # 💡 順手把已經寫到硬碟的那份音檔清掉，避免留下無效的殘留檔案
+                    try:
+                        if os.path.exists(save_path):
+                            os.remove(save_path)
+                    except Exception:
+                        pass
+                    return jsonify({
+                        "status": "error",
+                        "error_type": "insufficient_speech",
+                        "message": "偵測到這次錄音幾乎沒有念到課文內容（可能沒有說話、說話內容跟課文不符，或錄音太短）。"
+                                    "字數太少時，節奏與語速的統計數字會不準確，容易被誤判成表現很好，"
+                                    "請重新錄音，並確保有完整、清楚地念出課文內容。"
+                    })
 
                 whisper_processed_text = (full_wer_raw_json.get("whisper_raw_text") or "").strip()
                 print(f"🔬 [直接取用] WER API 回傳的 whisper_raw_text: {whisper_processed_text}", flush=True)
@@ -1166,13 +1265,13 @@ def upload_audio():
                             varco_score = 0.00
                     else:
                         print(f"⚠️ 同學 API 回應異常，狀態碼: {npvi_response.status_code}, 內容: {npvi_response.text}", flush=True)
-                        npvi_score = 58.50
-                        varco_score = 48.20
+                        npvi_score = 0
+                        varco_score = 0
 
                 except Exception as speech_err:
                     print(f"🚨 呼叫同學 API 發生異常，原因: {str(speech_err)}", flush=True)
-                    npvi_score = 58.50
-                    varco_score = 48.20
+                    npvi_score = 0
+                    varco_score = 0
 
             else:
                 cursor.close()
@@ -1191,96 +1290,11 @@ def upload_audio():
         wer_score = round(float(wer_stats.get("wer_repair_fluency", 0.0)), 2)
         total_words = int(wer_stats.get("total_ref_words", 0))
 
-        # 🚀 【核心新增】：呼叫 Ollama 評分——
-        #    完整度/準確度/流利度：用 wer_stats 的錯誤統計數字 + 停頓次數
-        #    語法正確性：直接把 Whisper 辨識出的文字丟給 Ollama 判斷
-        set_upload_progress(progress_id, 'AI 正在評估發音完整度、準確度與流利度分數...')
-        try:
-            ollama_error_scores = call_ollama_score_errors(wer_stats, pause_count)
-            score_completeness = ollama_error_scores.get("completeness", 0.0)
-            score_accuracy = ollama_error_scores.get("accuracy", 0.0)
-            score_fluency = ollama_error_scores.get("fluency", 0.0)
-            print(f"✅ Ollama 錯誤統計評分完成: 完整度={score_completeness} 準確度={score_accuracy} 流利度={score_fluency}", flush=True)
-        except Exception as ollama_err:
-            print(f"🚨 呼叫 Ollama 錯誤統計評分整體失敗: {ollama_err}", flush=True)
-
-        set_upload_progress(progress_id, 'AI 正在評估語法正確性...')
-        try:
-            score_grammar = call_ollama_score_grammar(whisper_processed_text)
-            print(f"✅ Ollama 語法評分完成: {score_grammar}", flush=True)
-        except Exception as ollama_err:
-            print(f"🚨 呼叫 Ollama 語法評分整體失敗: {ollama_err}", flush=True)
-
-        # 💡 每一段錄音都計算「這一段自己」的流暢度評分 (0-100)，存進 recordings.fluency_score_100，
-        #    不管分段還是整篇模式都會算，純粹代表這一段錄音自己的 nPVI/Varco 表現。
-        recording_fluency_score_100 = 0.0
-        set_upload_progress(progress_id, 'AI 正在計算整體流暢度分數...')
-        try:
-            recording_fluency_score_100 = call_ollama_score_overall_fluency(npvi_score, varco_score)
-            print(f"✅ Ollama 單段流暢度評分完成: {recording_fluency_score_100}", flush=True)
-        except Exception as ollama_err:
-            print(f"🚨 呼叫 Ollama 單段流暢度評分失敗: {ollama_err}", flush=True)
-
-        # 🚀 【核心新增】：兩段「整份錄音」的文字回饋——
-        #    一段是 nPVI/Varco 節奏語速的流暢度回饋，一段是發音正確度(WER)的回饋。
-        # 🚀 兩段「整份錄音」的文字回饋——
-        #    一段是 nPVI/Varco 節奏語速的流暢度回饋，逐句的即時提示不會呼叫 Ollama
-        #   （前端用固定範本秒開），這裡是給使用者事後查看整體報告時看的、比較有深度的整體評語。
-        fluency_feedback_text = ""
-        set_upload_progress(progress_id, 'AI 正在生成節奏流暢度建議...')
-        try:
-            fluency_feedback_text = call_ollama_fluency_feedback(sentence_fluency)
-            print(f"✅ Ollama 流暢度回饋完成: {fluency_feedback_text}", flush=True)
-        except Exception as ollama_err:
-            print(f"🚨 呼叫 Ollama 流暢度回饋失敗: {ollama_err}", flush=True)
-
-        # 🚀 三個分項評語：完整度 / 準確度 / 流利度，各自獨立生成，
-        #    供使用者點擊對應標籤時個別顯示+TTS播放。
-        completeness_feedback_text = ""
-        accuracy_feedback_text = ""
-        wer_fluency_feedback_text = ""
-        set_upload_progress(progress_id, 'AI 正在生成完整度回饋建議...')
-        try:
-            completeness_feedback_text = call_ollama_wer_category_feedback('completeness', wer_stats)
-            print(f"✅ Ollama 完整度分項回饋完成: {completeness_feedback_text}", flush=True)
-        except Exception as ollama_err:
-            print(f"🚨 呼叫 Ollama 完整度分項回饋失敗: {ollama_err}", flush=True)
-        set_upload_progress(progress_id, 'AI 正在生成準確度回饋建議...')
-        try:
-            accuracy_feedback_text = call_ollama_wer_category_feedback('accuracy', wer_stats)
-            print(f"✅ Ollama 準確度分項回饋完成: {accuracy_feedback_text}", flush=True)
-        except Exception as ollama_err:
-            print(f"🚨 呼叫 Ollama 準確度分項回饋失敗: {ollama_err}", flush=True)
-        set_upload_progress(progress_id, 'AI 正在生成流利度回饋建議...')
-        try:
-            wer_fluency_feedback_text = call_ollama_wer_category_feedback('fluency', wer_stats)
-            print(f"✅ Ollama 流利度分項回饋完成: {wer_fluency_feedback_text}", flush=True)
-        except Exception as ollama_err:
-            print(f"🚨 呼叫 Ollama 流利度分項回饋失敗: {ollama_err}", flush=True)
-
-        # 🔧 核心修正：projects.overall_fluency_score_100（整個「專案」的分數）
-        #    *只有整篇模式 (whole)* 才能直接沿用這一段的分數 —— 因為整篇模式從頭到尾只有這一筆錄音，
-        #    這一筆的分數本來就等於整個專案的分數。
-        #
-        #    分段模式絕對不能在這裡寫入 projects.overall_fluency_score_100，
-        #    因為那樣只會用「剛錄完的這一段」自己的 npvi/varco 去代表整個專案，
-        #    把原本正確的「全部已錄段落的平均」蓋掉。分段模式的整體分數，
-        #    只由 get_project_total_report() 在使用者切到 Step 3 報告頁時，
-        #    重新查詢 recordings 表裡「目前所有段落」的 npvi/varco 算出正確平均後才計算，
-        #    這裡完全不用做任何事。
-        overall_fluency_score_100 = 0.0
-        if mode == 'whole':
-            overall_fluency_score_100 = recording_fluency_score_100  # 整篇模式：這一筆就是整個專案的分數，直接沿用，不用再呼叫一次 Ollama
-            try:
-                cursor.execute(
-                    "UPDATE projects SET overall_fluency_score_100 = %s WHERE project_id = %s",
-                    (overall_fluency_score_100, project_id)
-                )
-                conn.commit()
-            except Exception as db_write_err:
-                print(f"🚨 寫入 projects.overall_fluency_score_100 失敗: {db_write_err}", flush=True)
-        else:
-            print("ℹ️ 分段模式：不寫入 projects.overall_fluency_score_100，交給 get_project_total_report() 用全段平均正確計算。", flush=True)
+        # 🔧 核心修正：Ollama 評分/回饋生成，全部移到 /generate_project_llm_summary 這支新 API，
+        #    不再是每次上傳都立刻呼叫，改成使用者點擊「查看結論」時才批次處理，
+        #    讓每一段的上傳速度變快，分散整體等待時間。
+        #    這裡先用空值/佔位存進資料庫，score_completeness 等四個 Ollama 評分欄位
+        #    保持 NULL——這個 NULL 狀態本身就是「這一段還沒產生 LLM 結果」的判斷依據。
 
         extended_report = {
             "textgrid_file_target": textgrid_filename,
@@ -1290,10 +1304,10 @@ def upload_audio():
             "chunk_details": chunks_list,
             "word_timings": word_timings,
             "sentence_fluency": sentence_fluency,
-            "fluency_feedback_text": fluency_feedback_text,
-            "completeness_feedback_text": completeness_feedback_text,
-            "accuracy_feedback_text": accuracy_feedback_text,
-            "wer_fluency_feedback_text": wer_fluency_feedback_text,
+            "fluency_feedback_text": "",
+            "completeness_feedback_text": "",
+            "accuracy_feedback_text": "",
+            "wer_fluency_feedback_text": "",
             "raw_wer_output": full_wer_raw_json,
             "raw_npvi_output": full_npvi_raw_json
         }
@@ -1305,28 +1319,27 @@ def upload_audio():
             insert_sql = """
                INSERT INTO recordings (project_id, paragraph_index, file_path, wer, total_words, error_count,
                                        alignment_report, npvi, varco, whisper_text_path, textgrid_path,
-                                       score_completeness, score_accuracy, score_fluency, score_grammar,
-                                       fluency_score_100, fluency_yellow_count, fluency_red_count,
-                                       fluency_feedback_text, completeness_feedback_text, accuracy_feedback_text, wer_fluency_feedback_text)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                       fluency_yellow_count, fluency_red_count)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                ON DUPLICATE KEY UPDATE
                   file_path = %s, wer = %s, total_words = %s, error_count = %s, alignment_report = %s,
                   npvi = %s, varco = %s, whisper_text_path = %s, textgrid_path = %s,
-                  score_completeness = %s, score_accuracy = %s, score_fluency = %s, score_grammar = %s,
-                  fluency_score_100 = %s, fluency_yellow_count = %s, fluency_red_count = %s,
-                  fluency_feedback_text = %s, completeness_feedback_text = %s, accuracy_feedback_text = %s, wer_fluency_feedback_text = %s
+                  fluency_yellow_count = %s, fluency_red_count = %s,
+                  score_completeness = NULL, score_accuracy = NULL, score_fluency = NULL, score_grammar = NULL,
+                  fluency_score_100 = NULL, fluency_score_reason = NULL,
+                  fluency_feedback_text = NULL, completeness_feedback_text = NULL,
+                  accuracy_feedback_text = NULL, wer_fluency_feedback_text = NULL
                """
+            # 💡 重新錄音時（ON DUPLICATE KEY UPDATE 那段），故意把四個 Ollama 評分跟四段回饋文字
+            #    全部重置回 NULL——因為新錄音的內容變了，舊的 LLM 結果已經不準確、是「過期資料」，
+            #    這樣「查看結論」那支 API 才會正確判斷「這一段需要重新產生 LLM 結果」。
             cursor.execute(insert_sql, (
                 project_id, para_idx, db_path, wer_score, total_words, error_count, alignment_json,
                 npvi_score, varco_score, whisper_text_db_path, textgrid_db_path,
-                score_completeness, score_accuracy, score_fluency, score_grammar,
-                recording_fluency_score_100, fluency_yellow_count, fluency_red_count,
-                fluency_feedback_text, completeness_feedback_text, accuracy_feedback_text, wer_fluency_feedback_text,
+                fluency_yellow_count, fluency_red_count,
                 db_path, wer_score, total_words, error_count, alignment_json,
                 npvi_score, varco_score, whisper_text_db_path, textgrid_db_path,
-                score_completeness, score_accuracy, score_fluency, score_grammar,
-                recording_fluency_score_100, fluency_yellow_count, fluency_red_count,
-                fluency_feedback_text, completeness_feedback_text, accuracy_feedback_text, wer_fluency_feedback_text
+                fluency_yellow_count, fluency_red_count
             ))
             conn.commit()
         except Exception as db_err:
@@ -1354,17 +1367,7 @@ def upload_audio():
                 "sentence_fluency": sentence_fluency,
                 "textgrid_associated": textgrid_filename,
                 "whisper_text_path": whisper_text_db_path,
-                "textgrid_path": textgrid_db_path,
-                "score_completeness": score_completeness,
-                "score_accuracy": score_accuracy,
-                "score_fluency": score_fluency,
-                "score_grammar": score_grammar,
-                "overall_fluency_score_100": overall_fluency_score_100,
-                "recording_fluency_score_100": recording_fluency_score_100,
-                "fluency_feedback_text": fluency_feedback_text,
-                "completeness_feedback_text": completeness_feedback_text,
-                "accuracy_feedback_text": accuracy_feedback_text,
-                "wer_fluency_feedback_text": wer_fluency_feedback_text
+                "textgrid_path": textgrid_db_path
             }
         })
 
@@ -1439,6 +1442,180 @@ def get_word_pronunciation_tip():
         return jsonify({"status": "error", "message": str(e)})
 
 
+@app.route('/generate_project_llm_summary', methods=['POST'])
+def generate_project_llm_summary():
+    """
+    💡 【核心新增】：使用者點擊「查看結論」時呼叫這支 API，統一在這裡批次處理
+       整個專案裡「還沒有 LLM 結果」的段落——不管是分段模式錄完第 1 段就先看結論、
+       之後回頭補錄 2/3/4 段再看一次結論，或是一次錄完全部段落才看結論，都適用同一套邏輯：
+
+       逐一檢查每一筆已經有 WER/NPVI 分析結果的錄音：
+       - 如果 score_completeness 已經有值（不是 NULL）→ 代表這段已經產生過 LLM 結果了，
+         直接跳過，不重新呼叫 Ollama、不覆蓋既有結果。
+       - 如果 score_completeness 是 NULL → 代表這段還沒處理過，呼叫 Ollama 產生四個維度的
+         評分、整體流暢度分數、四段回饋文字，並把結果連同同步更新進 alignment_report 這個
+         JSON 欄位（因為前端讀回饋文字是從這個 JSON blob 裡讀的，兩邊要保持一致）。
+
+       整篇模式的 projects.overall_fluency_score_100，也是在這裡（該筆錄音處理完之後）才更新。
+    """
+    progress_id = request.form.get('progress_id') or (request.get_json(silent=True) or {}).get('progress_id')
+    project_id = request.form.get('project_id') or (request.get_json(silent=True) or {}).get('project_id')
+
+    if not project_id:
+        return jsonify({"status": "error", "message": "缺少 project_id"})
+
+    conn = get_db_connection()
+    if conn is None:
+        return jsonify({"status": "error", "message": "後端連不上 MySQL 資料庫"})
+
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute(
+            "SELECT project_id, paragraph_index, npvi, varco, alignment_report, score_completeness "
+            "FROM recordings WHERE project_id = %s AND wer IS NOT NULL ORDER BY paragraph_index ASC",
+            (project_id,)
+        )
+        rows = cursor.fetchall()
+
+        if not rows:
+            cursor.close()
+            conn.close()
+            clear_upload_progress(progress_id)
+            return jsonify({"status": "success", "processed_count": 0, "skipped_count": 0, "message": "沒有任何已上傳的錄音可以處理"})
+
+        processed_count = 0
+        skipped_count = 0
+        is_whole_mode_project = any(r['paragraph_index'] == 0 for r in rows)
+
+        for row in rows:
+            para_idx = row['paragraph_index']
+
+            # 💡 已經有 LLM 結果了，跳過，絕對不能重新產生覆蓋掉既有結果
+            if row['score_completeness'] is not None:
+                skipped_count += 1
+                print(f"⏭️ 段落 {para_idx} 已經有 LLM 結果，跳過", flush=True)
+                continue
+
+            set_upload_progress(progress_id, f'AI 正在處理第 {para_idx} 段的評分與建議...')
+
+            # 💡 從存好的 alignment_report JSON 裡，重建這一段當初的 wer_stats / pause_count /
+            #    sentence_fluency / whisper文字，這些是呼叫 Ollama 各項評分函式時需要的輸入。
+            try:
+                stored_report = json.loads(row['alignment_report']) if row['alignment_report'] else {}
+            except Exception:
+                stored_report = {}
+
+            raw_wer_output = stored_report.get('raw_wer_output', {}) or {}
+            raw_npvi_output = stored_report.get('raw_npvi_output', {}) or {}
+            wer_stats = raw_wer_output.get('statistics', {}) or {}
+            whisper_processed_text = (raw_wer_output.get('whisper_raw_text') or '').strip()
+            sentence_fluency = stored_report.get('sentence_fluency', []) or []
+
+            npvi_pause_data = ((raw_npvi_output.get('data') or {}).get('pause_analysis') or {})
+            pause_count = len(npvi_pause_data.get('pauses', []) or [])
+
+            npvi_score = float(row['npvi'] or 0.0)
+            varco_score = float(row['varco'] or 0.0)
+
+            score_completeness = score_accuracy = score_fluency = score_grammar = 0.0
+            recording_fluency_score_100 = 0.0
+            fluency_score_reason = ""
+            fluency_feedback_text = completeness_feedback_text = accuracy_feedback_text = wer_fluency_feedback_text = ""
+
+            try:
+                ollama_error_scores = call_ollama_score_errors(wer_stats, pause_count)
+                score_completeness = ollama_error_scores.get("completeness", 0.0)
+                score_accuracy = ollama_error_scores.get("accuracy", 0.0)
+                score_fluency = ollama_error_scores.get("fluency", 0.0)
+            except Exception as e:
+                print(f"🚨 段落 {para_idx} Ollama 錯誤統計評分失敗: {e}", flush=True)
+
+            try:
+                score_grammar = call_ollama_score_grammar(whisper_processed_text)
+            except Exception as e:
+                print(f"🚨 段落 {para_idx} Ollama 語法評分失敗: {e}", flush=True)
+
+            try:
+                recording_fluency_score_100, fluency_score_reason = call_ollama_score_overall_fluency(npvi_score, varco_score)
+            except Exception as e:
+                print(f"🚨 段落 {para_idx} Ollama 流暢度評分失敗: {e}", flush=True)
+
+            try:
+                fluency_feedback_text = call_ollama_fluency_feedback(sentence_fluency)
+            except Exception as e:
+                print(f"🚨 段落 {para_idx} Ollama 流暢度回饋失敗: {e}", flush=True)
+
+            try:
+                completeness_feedback_text = call_ollama_wer_category_feedback('completeness', wer_stats)
+            except Exception as e:
+                print(f"🚨 段落 {para_idx} Ollama 完整度回饋失敗: {e}", flush=True)
+
+            try:
+                accuracy_feedback_text = call_ollama_wer_category_feedback('accuracy', wer_stats)
+            except Exception as e:
+                print(f"🚨 段落 {para_idx} Ollama 準確度回饋失敗: {e}", flush=True)
+
+            try:
+                wer_fluency_feedback_text = call_ollama_wer_category_feedback('fluency', wer_stats)
+            except Exception as e:
+                print(f"🚨 段落 {para_idx} Ollama 流利度回饋失敗: {e}", flush=True)
+
+            # 💡 把回饋文字同步寫回 JSON blob，跟獨立欄位保持一致（前端讀的是 JSON blob 裡這幾個 key）
+            stored_report['fluency_feedback_text'] = fluency_feedback_text
+            stored_report['completeness_feedback_text'] = completeness_feedback_text
+            stored_report['accuracy_feedback_text'] = accuracy_feedback_text
+            stored_report['wer_fluency_feedback_text'] = wer_fluency_feedback_text
+            updated_alignment_json = json.dumps(stored_report, ensure_ascii=False)
+
+            try:
+                cursor.execute(
+                    """UPDATE recordings SET
+                           score_completeness = %s, score_accuracy = %s, score_fluency = %s, score_grammar = %s,
+                           fluency_score_100 = %s, fluency_score_reason = %s,
+                           fluency_feedback_text = %s, completeness_feedback_text = %s,
+                           accuracy_feedback_text = %s, wer_fluency_feedback_text = %s,
+                           alignment_report = %s
+                       WHERE project_id = %s AND paragraph_index = %s""",
+                    (score_completeness, score_accuracy, score_fluency, score_grammar,
+                     recording_fluency_score_100, fluency_score_reason,
+                     fluency_feedback_text, completeness_feedback_text,
+                     accuracy_feedback_text, wer_fluency_feedback_text,
+                     updated_alignment_json,
+                     project_id, para_idx)
+                )
+                conn.commit()
+                processed_count += 1
+                print(f"✅ 段落 {para_idx} LLM 結果已產生並存檔", flush=True)
+            except Exception as e:
+                print(f"🚨 段落 {para_idx} 寫入 LLM 結果失敗: {e}", flush=True)
+
+            # 💡 整篇模式：這一筆就是整個專案的分數，處理完立刻同步進 projects 表
+            if para_idx == 0 and is_whole_mode_project:
+                try:
+                    cursor.execute(
+                        "UPDATE projects SET overall_fluency_score_100 = %s WHERE project_id = %s",
+                        (recording_fluency_score_100, project_id)
+                    )
+                    conn.commit()
+                except Exception as e:
+                    print(f"🚨 寫入 projects.overall_fluency_score_100 失敗: {e}", flush=True)
+
+        cursor.close()
+        conn.close()
+        clear_upload_progress(progress_id)
+        return jsonify({
+            "status": "success",
+            "processed_count": processed_count,
+            "skipped_count": skipped_count
+        })
+
+    except Exception as e:
+        if cursor: cursor.close()
+        if conn: conn.close()
+        clear_upload_progress(progress_id)
+        return jsonify({"status": "error", "message": f"產生結論失敗: {str(e)}"})
+
+
 @app.route('/get_project_total_report', methods=['GET'])
 def get_project_total_report():
     project_id = request.args.get('project_id')
@@ -1465,7 +1642,7 @@ def get_project_total_report():
 
         sql = """
             SELECT paragraph_index, file_path, wer, total_words, error_count, alignment_report, npvi, varco,
-                   score_completeness, score_accuracy, score_fluency, score_grammar, fluency_score_100,
+                   score_completeness, score_accuracy, score_fluency, score_grammar, fluency_score_100, fluency_score_reason,
                    fluency_feedback_text, completeness_feedback_text, accuracy_feedback_text, wer_fluency_feedback_text
             FROM recordings
             WHERE project_id = %s
@@ -1483,6 +1660,7 @@ def get_project_total_report():
 
         total_npvi = 0.0
         total_varco = 0.0
+        total_fluency_score_100 = 0.0  # 💡 新增：累加每段已經存好的流暢度分數，改用平均值而不是重新問一次 Ollama
         recorded_count = 0
 
         for i in range(1, total_paragraphs_count + 1):
@@ -1512,6 +1690,7 @@ def get_project_total_report():
                     "score_fluency": row['score_fluency'] if row['score_fluency'] is not None else 0.0,
                     "score_grammar": row['score_grammar'] if row['score_grammar'] is not None else 0.0,
                     "fluency_score_100": row['fluency_score_100'] if row['fluency_score_100'] is not None else 0.0,
+                    "fluency_score_reason": row['fluency_score_reason'] or "",
                     "fluency_feedback_text": row['fluency_feedback_text'] or "",
                     "completeness_feedback_text": row['completeness_feedback_text'] or "",
                     "accuracy_feedback_text": row['accuracy_feedback_text'] or "",
@@ -1525,6 +1704,7 @@ def get_project_total_report():
 
                     total_npvi += float(row['npvi'] or 0.0)
                     total_varco += float(row['varco'] or 0.0)
+                    total_fluency_score_100 += float(row['fluency_score_100'] or 0.0)  # 💡 新增
 
                     recorded_count += 1
             else:
@@ -1545,7 +1725,8 @@ def get_project_total_report():
                     "completeness_feedback_text": None,
                     "accuracy_feedback_text": None,
                     "wer_fluency_feedback_text": None,
-                    "fluency_score_100": None
+                    "fluency_score_100": None,
+                    "fluency_score_reason": None
                 })
 
         # 🔧 核心修正：上面的迴圈只跑 range(1, total_paragraphs_count+1)，
@@ -1580,6 +1761,7 @@ def get_project_total_report():
                 "score_fluency": row['score_fluency'] if row['score_fluency'] is not None else 0.0,
                 "score_grammar": row['score_grammar'] if row['score_grammar'] is not None else 0.0,
                 "fluency_score_100": row['fluency_score_100'] if row['fluency_score_100'] is not None else 0.0,
+                "fluency_score_reason": row['fluency_score_reason'] or "",
                 "fluency_feedback_text": row['fluency_feedback_text'] or "",
                 "completeness_feedback_text": row['completeness_feedback_text'] or "",
                 "accuracy_feedback_text": row['accuracy_feedback_text'] or "",
@@ -1592,28 +1774,23 @@ def get_project_total_report():
                 total_errors += int(row['error_count'] or 0)
                 total_npvi += float(row['npvi'] or 0.0)
                 total_varco += float(row['varco'] or 0.0)
+                total_fluency_score_100 += float(row['fluency_score_100'] or 0.0)  # 💡 新增
                 recorded_count += 1
 
         avg_npvi = total_npvi / recorded_count if recorded_count > 0 else 0.0
         avg_varco = total_varco / recorded_count if recorded_count > 0 else 0.0
 
-        # 🚀 用整體平均的 nPVI/Varco，呼叫 Ollama 給一個 0-100 的綜合流暢度分數，
-        #    取代原本「一堆數字看不懂」的呈現方式。只有真的有錄音資料才呼叫，避免浪費 API 呼叫。
+        # 🔧 核心修正：不要再每次都重新問一次 Ollama 了！
+        #    之前的寫法每次使用者查看報告，都會即時呼叫 Ollama 重新算一次 0-100 分數，
+        #    但 Ollama 本身有隨機性，同樣的 npvi/varco 每次問到的分數會不一樣，
+        #    導致「同一份報告，刷新幾次分數就跳來跳去」，使用者體感就是不穩定、不可信任。
         #
-        # 🔧 核心修正：分段模式的這個分數「完全不寫回 projects 表」！
-        #    只是每次使用者查看報告時，即時用 recordings 表裡目前所有已錄段落重新算一次，
-        #    算完直接回傳給前端顯示，不做任何持久化。
-        #    projects.overall_fluency_score_100 這個欄位，只給「整篇模式(whole)」在
-        #    upload_audio() 裡使用（因為整篇模式從頭到尾只有一筆錄音，那一筆就代表整個專案）。
-        #    這樣「分段模式的整體分數」永遠是當下最新的正確平均，而且完全不會跟
-        #    「整篇模式的分數」互相污染同一個欄位。
-        overall_fluency_score_100 = 0.0
-        if recorded_count > 0:
-            try:
-                overall_fluency_score_100 = call_ollama_score_overall_fluency(avg_npvi, avg_varco)
-                print(f"✅ Ollama 整體流暢度評分完成 (分段模式，即時計算，不寫入 projects): {overall_fluency_score_100}", flush=True)
-            except Exception as ollama_err:
-                print(f"🚨 呼叫 Ollama 整體流暢度評分失敗: {ollama_err}", flush=True)
+        #    正確做法：每一段錄音自己的 fluency_score_100，早在上傳當下就已經呼叫過 Ollama
+        #    算好、存進資料庫了（recordings.fluency_score_100），是固定不變的值。
+        #    分段模式的「整體」流暢度分數，直接把所有已錄段落「已經存好」的分數取平均即可，
+        #    不需要、也不應該再另外呼叫一次 Ollama——這樣不管刷新幾次，結果都會是同一個數字。
+        overall_fluency_score_100 = total_fluency_score_100 / recorded_count if recorded_count > 0 else 0.0
+        print(f"✅ 流暢度綜合評分（分段模式，取各段已存分數的平均，不再即時呼叫 Ollama）: {overall_fluency_score_100:.1f}", flush=True)
 
         global_stats = {
             "wer_average": total_wer / recorded_count if recorded_count > 0 else 0,

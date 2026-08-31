@@ -1475,6 +1475,53 @@ function updateRecordBtnUI() {
  *    「這個上傳工作(progress_id)目前真正跑到哪個階段」得到的真實回應，
  *    不是前端自己猜的固定動畫。
  */
+/**
+ * 💡 【核心新增】：「查看結論」按鈕觸發的函式。
+ *    不管現在錄了幾段（可能只錄完第 1 段、也可能全部錄完），都可以呼叫，
+ *    後端 /generate_project_llm_summary 會自動判斷「哪些段落還沒有 LLM 結果」，
+ *    只針對那些段落產生評分與回饋，已經產生過的段落不會被重新呼叫、也不會被覆蓋。
+ */
+async function viewConclusion() {
+    const projectId = state.activeProjectId;
+    if (!projectId) {
+        showToast('錯誤：找不到當前專案 ID');
+        return;
+    }
+
+    const btn = document.getElementById('skipToResultBtn');
+    if (btn && btn.disabled) return; // 防止重複點擊
+    if (btn) { btn.disabled = true; btn.textContent = '產生中…'; }
+
+    const progressId = `p_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    showUploadProgress(progressId);
+
+    try {
+        const formData = new FormData();
+        formData.append('project_id', projectId);
+        formData.append('progress_id', progressId);
+
+        const response = await fetch('/generate_project_llm_summary', { method: 'POST', body: formData });
+        const result = await response.json();
+
+        if (result.status === 'success') {
+            if (result.processed_count > 0) {
+                showToast(`已為 ${result.processed_count} 段新錄音產生 AI 評分與建議 🎉`);
+            } else {
+                showToast('目前所有段落都已經有結果了，直接顯示報告 🎉');
+            }
+            await settleAndShowReport();
+        } else {
+            throw new Error(result.message || '產生結論失敗');
+        }
+    } catch (error) {
+        console.error('查看結論失敗:', error);
+        showToast('查看結論失敗: ' + error.message);
+    } finally {
+        hideUploadProgress();
+        if (btn) { btn.disabled = false; btn.textContent = '📊 查看結論'; }
+    }
+}
+
 function showUploadProgress(progressId) {
     let overlay = document.getElementById('uploadProgressOverlay');
     if (!overlay) {
@@ -1614,14 +1661,15 @@ async function uploadAudio() {
                 result.wer_result.statistics.fluency_feedback_text = result.wer_result.fluency_feedback_text || '';
                 result.wer_result.statistics.wer_feedback_text = result.wer_result.wer_feedback_text || '';
 
-                // 呼叫單段即時更新器
+                // 呼叫單段即時更新器（這裡只會有 WER/NPVI 的資料，AI 評分/回饋要等使用者
+                // 點擊「查看結論」才會產生，所以雷達圖等依賴 AI 分數的部分此時會先顯示 0，是正常的）
                 renderWerReportToPanel3(
                     result.wer_result.alignment_report,
                     result.wer_result.statistics,
                     currentPara,
                     result.url
                 );
-                showToast(`段落 ${currentPara} 儲存與雙 AI 分析成功！🎉`);
+                showToast(`段落 ${currentPara} 錄音已儲存，語音分析完成 🎉`);
             } else {
                 showToast(`段落 ${currentPara} 儲存成功 (分析未完成)`);
             }
@@ -1630,26 +1678,11 @@ async function uploadAudio() {
                 ? true
                 : state.currentParagraph >= (state.article.paragraphs.length - 1);
             if (isLast) {
-                showToast('全部錄音完成！快來看看 AI 流暢度分析報告吧 🎉');
-
-                if (state.practiceMode === 'whole' && result.wer_result && result.wer_result.statistics) {
-                    // 💡 整篇模式：不要再呼叫 settleAndShowReport() 去後端 /get_project_total_report 抓「平均」，
-                    //    那支 API 目前無法正確辨識整篇錄音這一筆資料，算出來的平均永遠是 0。
-                    //    這裡直接拿這次上傳完成、後端即時回傳的分析結果寫進總成績卡，不經過任何平均計算。
-                    state.completedSteps.add(2);
-                    state.currentStep = 2;
-                    updateStepUI();
-                    renderWholeReportDirectly(
-                        result.wer_result,
-                        result.url
-                    );
-                } else if (typeof settleAndShowReport === 'function') {
-                    await settleAndShowReport();
-                } else {
-                    state.completedSteps.add(2);
-                    state.currentStep = 2;
-                    updateStepUI();
-                }
+                // 🔧 核心修正：不再自動跳轉到結論頁面！
+                //    LLM 評分/回饋現在改成使用者主動點擊「查看結論」才會產生，
+                //    這裡錄完最後一段只提示「可以去看結論了」，不強制跳轉畫面，
+                //    讓使用者可以繼續留在錄音頁面（例如想重錄某一段）。
+                showToast('全部段落都上傳完成！可以點擊「查看結論」產生 AI 評分報告 🎉');
             } else {
                 await goToParagraph(state.currentParagraph + 1);
             }
@@ -3775,16 +3808,18 @@ document.addEventListener('click', (e) => {
 //  📋 點擊「完整度/準確度/流利度」標籤 → 右側浮框顯示該分項 LLM 評語 + TTS
 // ══════════════════════════════════════════════════
 /**
- * 💡 把 0-10 的流暢度分數換算成「初級/中級/高級」等級文字。
+ * 💡 把 0-10 的流暢度分數換算成「不流暢/待加強/流暢」等級文字。
  *    這個判斷邏輯要跟後端 app.py 的 score_to_fluency_tier() 保持完全一致：
- *    低於 5 分 = 初級 / 5~8 分 = 中級 / 高於 8 分 = 高級。
+ *    低於 5 分 = 不流暢 / 5~8 分 = 待加強 / 高於 8 分 = 流暢。
+ *    （分數計算時內部仍是對照文獻的初級/中級/高級門檻，只是顯示給使用者看的文字
+ *    換成比較直覺的說法，兩者是同一套區間、只差在顯示字眼。）
  *    等級完全由分數落在哪個區間反推，後端不會另外存等級欄位。
  */
 function scoreToFluencyTierLabel(score) {
     if (score == null || isNaN(score)) return '';
-    if (score < 5) return { text: '初級', color: '#dc2626' };
-    if (score <= 8) return { text: '中級', color: '#d97706' };
-    return { text: '高級', color: '#16a34a' };
+    if (score < 5) return { text: '不流暢', color: '#dc2626' };
+    if (score <= 8) return { text: '待加強', color: '#d97706' };
+    return { text: '流暢', color: '#16a34a' };
 }
 
 function ensureCategoryFeedbackPopup() {
