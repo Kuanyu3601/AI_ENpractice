@@ -275,9 +275,44 @@ function pauseRecordingSegment() {
 async function refreshCombinedWaveform() {
     if (recordedSegments.length === 0) return;
 
-    // 將所有暫存的有效說話碎片拼成一個完整的大音檔
-    const combinedBlob = new Blob(recordedSegments, { type: recordedSegments[0].type });
-    state.recordingBlob = combinedBlob; // 供最終上傳使用
+    // 🔧 核心修正：多段錄音（中間暫停過又繼續）不能直接拼接原始位元組！
+    //    每一段各自都是獨立的 MediaRecorder session、各自完整編碼成一個 WebM 檔案，
+    //    直接把兩個獨立 WebM 檔案的位元組接在一起，只有第一段的檔頭有效，
+    //    後面接上去的部分瀏覽器完全讀不懂，之後 convertToWav16k() 解碼就會直接報
+    //    「EncodingError: Unable to decode audio data」，因為那根本不是一個合法的音檔。
+    //
+    //    正確做法：把每一段都先各自解碼成原始 PCM 樣本（PCM 是沒有容器格式的純數字資料），
+    //    PCM 才能安全地首尾接起來，接完再統一包成一個合法的 WAV 檔案。
+    let combinedBlob;
+    try {
+        if (recordedSegments.length === 1) {
+            // 只有一段，不用合併，直接轉成 16kHz WAV 即可
+            combinedBlob = await convertToWav16k(recordedSegments[0]);
+        } else {
+            const pcmParts = [];
+            for (const seg of recordedSegments) {
+                const pcm = await decodeBlobToPcm16k(seg);
+                pcmParts.push(pcm);
+            }
+            let totalLength = 0;
+            for (const p of pcmParts) totalLength += p.length;
+
+            const merged = new Float32Array(totalLength);
+            let offset = 0;
+            for (const p of pcmParts) {
+                merged.set(p, offset);
+                offset += p.length;
+            }
+            combinedBlob = pcmToWav(merged, 16000);
+        }
+    } catch (err) {
+        console.error('合併錄音片段失敗:', err);
+        showToast('錄音片段合併失敗，請重新錄這一段');
+        return;
+    }
+
+    // 💡 combinedBlob 現在已經是合法、可解碼的 16kHz WAV，直接供最終上傳使用
+    state.recordingBlob = combinedBlob;
 
     const url = URL.createObjectURL(combinedBlob);
 

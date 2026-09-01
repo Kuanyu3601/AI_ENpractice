@@ -191,376 +191,43 @@ function bindEvents() {
 // ══════════════════════════════════════════════════
 //  FIRST-TIME & PROFILE
 // ══════════════════════════════════════════════════
-function checkFirstTime() {
-    const age = localStorage.getItem('userAge');
-    const modal = document.getElementById('firstTimeModal');
-    // 💡 防禦性修正：加上元素存在檢查，避免這裡出錯連帶讓 DOMContentLoaded
-    //    裡「這行之後」的 bindEvents()、initUserHistory() 等初始化整批失效
-    if (!age && modal) {
-        modal.classList.add('active');
-    }
-}
 
-function confirmAge() {
-    const input = document.getElementById('modalAge');
-    const age = parseInt(input.value);
-    if (!age || age < 1 || age > 120) {
-        input.style.borderColor = '#e74c3c';
-        input.focus();
-        return;
-    }
-    localStorage.setItem('userAge', age);
-    const profile = JSON.parse(localStorage.getItem('userProfile') || '{}');
-    profile.age = age;
-    localStorage.setItem('userProfile', JSON.stringify(profile));
-    document.getElementById('firstTimeModal').classList.remove('active');
-    showToast('歡迎！資料已儲存');
-}
 
-async function openProfile() {
-    // 1. 打開 UI 面板
-    document.getElementById('profilePanel').classList.add('open');
-    document.getElementById('profileOverlay').classList.add('active');
 
-    try {
-        // 2. 向後端要目前 Session 使用者的最新資料
-        const res = await fetch('/api/get_user_info');
-        const data = await res.json();
 
-        if (data.status === 'success') {
-            // 3. 將資料庫的資料填入網頁欄位中
-            document.getElementById('profileName').value = data.name || '';
-            document.getElementById('profileAge').value = data.age || '';
-            document.getElementById('profileUsername').value = data.username || '';
-        } else {
-            showToast('無法載入使用者資料，請重新登入');
-        }
-    } catch (err) {
-        console.error('載入個人資料失敗:', err);
-    }
-}
-
-function closeProfile() {
-    document.getElementById('profilePanel').classList.remove('open');
-    document.getElementById('profileOverlay').classList.remove('active');
-}
-
-async function saveProfile() {
-    const nameInput = document.getElementById('profileName').value.trim();
-    const ageInput = parseInt(document.getElementById('profileAge').value);
-
-    if (!nameInput) { showToast('姓名不能為空喔！'); return; }
-    if (!ageInput || ageInput < 1 || ageInput > 120) { showToast('請輸入有效的年齡'); return; }
-
-    try {
-        // 將更新後的姓名與年齡傳回後端寫入 users 資料表
-        const res = await fetch('/api/update_user_info', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                name: nameInput,
-                age: ageInput
-            })
-        });
-        const data = await res.json();
-
-        if (data.status === 'success') {
-            showToast('個人資料已成功同步至資料庫 ✓');
-            closeProfile();
-        } else {
-            showToast('儲存失敗，請稍後再試');
-        }
-    } catch (err) {
-        console.error('儲存個人資料失敗:', err);
-        showToast('網路錯誤，無法儲存');
-    }
-}
 
 // ══════════════════════════════════════════════════
 //  STEP NAVIGATION  (between Step 1 / 2 / 3)
 // ══════════════════════════════════════════════════
-function goToStep(step) {
-    if (step === state.currentStep) return;
-    if (step > 0 && !state.completedSteps.has(step)) return;
-
-    // 若正在錄音，離開前先停止
-    if (state.currentStep === 1 && state.isRecording) stopRecording();
-
-    state.currentStep = step;
-    updateStepUI();
-
-    if (step === 0) _onEnterStep1();   // 回到選文章：顯示已選文章
-    if (step === 1) _onEnterStep2();   // 回到錄音：還原錄音狀態
-    if (step === 2) _onEnterStep3();   // 💡 新增：進入分析報告，重新向後端抓資料渲染
-}
 
 
-function navigateStep(dir) {
-    const next = state.currentStep + dir;
-    if (next < 0 || next > 2) return;
-    if (dir > 0 && !state.completedSteps.has(next)) return;
-
-    // 若正在錄音，離開前先停止
-    if (state.currentStep === 1 && state.isRecording) stopRecording();
-
-    state.currentStep = next;
-    updateStepUI();
-
-    if (next === 0) _onEnterStep1();
-    if (next === 1) _onEnterStep2();
-    if (next === 2) _onEnterStep3();   // 💡 新增：進入分析報告，重新向後端抓資料渲染
-}
 
 // ── 進入 Step 3：重新向後端抓這個專案的分析報告並渲染 ──────
 // 💡 這是這次修的核心：之前 goToStep/navigateStep 完全沒有處理「進入 Step 3」要做的事，
 //    導致重新整理頁面後，點步驟圓點切到分析頁，畫面只是切換過去，
 //    從來沒有真的去後端 /get_project_total_report 抓資料、重新渲染報告，
 //    看起來就像是「沒有讀取資料庫顯示對應資料」。
-function _onEnterStep3() {
-    if (!state.activeProjectId) return;
-    _loadAndRenderProjectReport(state.activeProjectId);
-}
 
 // ── 進入 Step 1：顯示已選文章預覽 ──────────────────
-function _onEnterStep1() {
-    if (!state.article) return;
-    renderPreview(state.article);
-    document.getElementById('startBtn').disabled = false;
-}
 
 // ── 進入 Step 2：還原段落錄音視覺狀態 ──────────────
-function _onEnterStep2() {
-    if (!state.article) return;
-    _applyPracticeModeUI();
-    // 重繪段落（badges / 鎖定狀態）
-    renderLyrics();
-    // 還原 pip 小圓點
-    _restoreRecordedBadges();
-}
 
 // ── 把已錄音的段落重新標記到 ParagraphUI ──────────
-function _restoreRecordedBadges() {
-    if (!window.ParagraphUI) return;
 
-    // 方式 A：從後端同步的 recordedSet（1-based）
-    const proj = state.projects[state.activeProjectId];
-    if (proj?.recordedSet) {
-        proj.recordedSet.forEach(idx => window.ParagraphUI.markRecorded(idx - 1));
-    }
-
-    // 方式 B：從本地 blob 暫存（0-based）
-    if (Array.isArray(state.recordings)) {
-        state.recordings.forEach((blob, i) => {
-            if (blob) window.ParagraphUI.markRecorded(i);
-        });
-    }
-}
-
-function updateStepUI() {
-
-    if (typeof stopChineseFeedback === 'function') stopChineseFeedback();
-    const _fbPopup = document.getElementById('category-feedback-popup');
-    if (_fbPopup) _fbPopup.style.display = 'none';
-
-    // Panels — use inline style.display as well as class,
-    // so Safari cache issues with CSS cannot block switching.
-    document.querySelectorAll('.step-panel').forEach((panel, i) => {
-        const isActive = (i === state.currentStep);
-        panel.classList.toggle('active', isActive);
-
-        if (isActive) {
-            panel.style.display = 'flex'; // 你的錄音區塊使用 flex 佈局
-        } else {
-            panel.style.display = 'none';
-        }
-
-    });
-
-    // Step dots
-    document.querySelectorAll('.step-dot').forEach((dot, i) => {
-        dot.classList.remove('active', 'completed', 'clickable');
-        if (i === state.currentStep) dot.classList.add('active');
-        else if (i < state.currentStep || state.completedSteps.has(i)) dot.classList.add('completed');
-        if (state.completedSteps.has(i) && i !== state.currentStep) dot.classList.add('clickable');
-    });
-
-    // Step lines
-    document.querySelectorAll('.step-line').forEach((line, i) => {
-        line.classList.toggle('filled', state.completedSteps.has(i + 1));
-    });
-
-    // Arrows
-    document.getElementById('prevArrow').disabled = state.currentStep === 0;
-    document.getElementById('nextArrow').disabled =
-        state.currentStep === 2 || !state.completedSteps.has(state.currentStep + 1);
-}
 
 // ══════════════════════════════════════════════════
 //  STEP 1 — ARTICLE SELECTION
 // ══════════════════════════════════════════════════
-function selectPreset(key) {
-    console.log('[main.js] selectPreset:', key);
-    const article = PRESET_ARTICLES[key];
-    if (!article) { console.warn('[main.js] 找不到文章:', key); return; }
-    state.article = article;
 
-    document.querySelectorAll('.article-card').forEach(c => c.classList.remove('selected'));
-    document.querySelector(`[data-article="${key}"]`).classList.add('selected');
-
-    renderPreview(article);
-    document.getElementById('startBtn').disabled = false;
-    updateReadingCount();
-}
-
-function renderPreview(article) {
-    if (!article || !article.paragraphs) return;
-
-    // 確保抓到的 DOM 不是 null
-    const titleEl = document.getElementById('previewTitle');
-    const contentEl = document.getElementById('previewContent');
-    const areaEl = document.getElementById('selectedPreview');
-
-    if (titleEl) titleEl.textContent = `${article.title}`;
-
-    if (contentEl) {
-        contentEl.innerHTML = article.paragraphs.map((p, i) => `
-            <div class="preview-para">
-                <span class="para-tag">段落 ${i + 1}</span>
-                <p>${p}</p>
-            </div>
-        `).join('');
-    }
-
-    if (areaEl) {
-        areaEl.classList.add('visible');
-        areaEl.style.display = 'block'; // 確保 CSS 沒有隱藏它
-    }
-}
 
 // 💡 依目前作用中的專案是否為「複習」，決定文章預覽右上角清除鍵要不要顯示。
 //    第一次練習 → 顯示清除鍵（可清除文章、回到只有選擇文章的狀態）
 //    複習(retry) → 隱藏清除鍵（不可清除文章）
-function _updateClearBtnVisibility() {
-    const clearBtn = document.getElementById('clearBtn');
-    if (!clearBtn) return;
-    const proj = state.projects[state.activeProjectId];
-    clearBtn.style.display = (proj && proj.isRetry) ? 'none' : '';
-}
-
-function renderPreview(article) {
-    if (!article || !article.paragraphs) return;
-
-    const titleEl = document.getElementById('previewTitle');
-    const contentEl = document.getElementById('previewContent');
-    const areaEl = document.getElementById('selectedPreview');
-
-    if (titleEl) titleEl.textContent = `${article.title}`;
-
-    if (contentEl) {
-        contentEl.innerHTML = article.paragraphs.map((p, i) => `
-            <div class="preview-para">
-                <span class="para-tag">段落 ${i + 1}</span>
-                <p>${p}</p>
-            </div>
-        `).join('');
-    }
-
-    if (areaEl) {
-        areaEl.classList.add('visible');
-        areaEl.style.display = 'block';
-    }
-
-    _updateClearBtnVisibility();   // 💡 新增：依複習/首次決定清除鍵顯示
-}
 
 
 
 
-function processFile(file) {
-    if (!file.name.endsWith('.txt')) {
-        showToast('請上傳 .txt 格式的文章');
-        return;
-    }
 
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-        const text = e.target.result;
-        const paragraphs = text.split(/\n\s*\n/).map(p => p.trim()).filter(p => p.length > 0);
-
-        if (paragraphs.length === 0) {
-            showToast('文章內容為空，無法解析');
-            return;
-        }
-
-        const articleName = file.name.replace('.txt', '');
-        const projectId = 'proj_' + Date.now();
-        const profile = JSON.parse(localStorage.getItem('userProfile') || '{"username":"guest"}');
-
-        try {
-            // 💡 加入這段：記錄並移除舊的「未命名」空殼
-            const oldEmptyId = state.activeProjectId;
-            if (state.projects[oldEmptyId] &&
-                (state.projects[oldEmptyId].title === '未命名文章' || !state.projects[oldEmptyId].article)) {
-                delete state.projects[oldEmptyId];
-            }
-
-            // 同步到資料庫
-            const res = await fetch('/create_project', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    username: profile.username,
-                    project_id: projectId,
-                    article_name: articleName,
-                    article_content: text
-                })
-            });
-
-            const newArticle = {
-                title: articleName,
-                paragraphs: paragraphs,
-                emoji: '📄',
-                content: text // 存一份原文，複習模式好用
-            };
-
-            // 更新全域狀態
-            state.article = newArticle;
-            state.activeProjectId = projectId;
-            state.projects[projectId] = {
-                id: projectId,
-                title: articleName,
-                article: newArticle,
-                currentStep: 0,
-                completedSteps: [0], // 💡 新文章：只完成「選擇文章」，避免繼承上一篇的完成狀態
-                practiceMode: 'segment', // 💡 新文章預設為分段練習
-                recordings: new Array(paragraphs.length).fill(null),
-                currentParagraph: 0,
-                date: new Date().toLocaleString('zh-TW', { hour12: false }) // 補上日期，排序才不會亂
-            };
-            // 💡 立即寫入 localStorage，避免建立後、選擇模式前就重新整理分頁而遺失預設值
-            _savePracticeModeForProject(projectId, 'segment');
-
-            // 💡 渲染 UI
-            renderPreview(newArticle);
-
-            // 💡 呼叫渲染側邊欄，此時「未命名」已經被 delete 掉了，只會剩下新的專案
-            renderProjectSidebar();
-
-            // 跳轉至該專案
-            await switchProject(projectId);
-
-            const startBtn = document.getElementById('startBtn');
-            if (startBtn) startBtn.disabled = false;
-
-            showToast('文章載入成功！');
-
-        } catch (err) {
-            console.error('上傳處理失敗:', err);
-            showToast('系統錯誤，請重新整理');
-        }
-    };
-    reader.readAsText(file);
-}
 
 // ══════════════════════════════════════════════════
 //  練習模式切換：分段練習 / 整篇練習
@@ -573,75 +240,12 @@ function processFile(file) {
  *    這裡改用 localStorage（以 project_id 當 key）額外保存一份，
  *    這樣即使重新整理分頁，也能正確還原「這次到底是分段還是整篇」。
  */
-const PRACTICE_MODE_STORAGE_KEY = 'practiceModeByProject';
 
-function _savePracticeModeForProject(projectId, mode) {
-    if (!projectId) return;
-    try {
-        const map = JSON.parse(localStorage.getItem(PRACTICE_MODE_STORAGE_KEY) || '{}');
-        map[projectId] = mode;
-        localStorage.setItem(PRACTICE_MODE_STORAGE_KEY, JSON.stringify(map));
-    } catch (e) {
-        console.warn('儲存練習模式到 localStorage 失敗:', e);
-    }
-}
 
-function _loadPracticeModeForProject(projectId) {
-    if (!projectId) return null;
-    try {
-        const map = JSON.parse(localStorage.getItem(PRACTICE_MODE_STORAGE_KEY) || '{}');
-        return map[projectId] || null;
-    } catch (e) {
-        return null;
-    }
-}
 
-function setPracticeMode(mode) {
-    state.practiceMode = mode;
-
-    const segBtn = document.getElementById('modeSegmentBtn');
-    const wholeBtn = document.getElementById('modeWholeBtn');
-    if (segBtn) segBtn.classList.toggle('active', mode === 'segment');
-    if (wholeBtn) wholeBtn.classList.toggle('active', mode === 'whole');
-
-    // 💡 關鍵修正：同步寫回目前作用中的專案，
-    //    這樣「切換練習次數」時才能正確還原該次選擇的分段/整篇練習模式
-    if (state.activeProjectId && state.projects[state.activeProjectId]) {
-        state.projects[state.activeProjectId].practiceMode = mode;
-        // 💡 同時寫入 localStorage，避免分頁重新整理後遺失這個選擇
-        _savePracticeModeForProject(state.activeProjectId, mode);
-    }
-}
 
 /** 依目前 state.practiceMode，切換 Step2 錄音區塊的顯示樣式（是否顯示左側段落選欄） */
-function _applyPracticeModeUI() {
-    const section = document.getElementById('recordSection');
-    if (!section) return;
-    section.classList.toggle('whole-mode', state.practiceMode === 'whole');
-}
 
-async function startPractice() {
-    if (!state.article) {
-        showToast('請先上傳 .txt 檔案');
-        return;
-    }
-
-    // ★ 這一行必須在最前面，updateStepUI 的箭頭/圓點判斷依賴它
-    state.completedSteps.add(1);
-    state.currentStep = 1;
-    updateStepUI();
-    _applyPracticeModeUI();
-
-    if (window.ParagraphUI) {
-        // setTotal 現在只有在真的換了不同次數/文章時才會清空 _recorded，這裡仍保留 restore 以防萬一
-        window.ParagraphUI.setTotal(state.article.paragraphs.length, state.activeProjectId);
-        window.ParagraphUI.setCurrentIdx(state.currentParagraph || 0);
-        _restoreRecordedBadges();
-    }
-
-
-    await goToParagraph(state.currentParagraph || 0);
-}
 
 async function fetchInitialRecordings() {
     const profile = JSON.parse(localStorage.getItem('userProfile') || '{}');
@@ -674,343 +278,36 @@ document.getElementById('uploadArea').addEventListener('click', function(e) {
 //  STEP 2 — RECORDING CORE (💡 軌道級精準煞車拼接版)
 // ══════════════════════════════════════════════════
 
-let currentStream = null;
 // 💡 用來儲存每一段「真正講話期間」產生的 Blob 碎片
-let recordedSegments = [];
 
 /**
  * 將段落文字依句號、問號、驚嘆號（含全形）拆成句子陣列。
  */
-function splitIntoSentences(text) {
-
-    const parts = text.match(/[^.?!。？！]+[.?!。？！]*(?:["'」』]*)/g) || [text];
-    return parts.map(s => s.trim()).filter(Boolean);
-}
 
 /** Render all paragraph cards in #lyricsView and update the progress label (不含錄音鎖定邏輯，可安全被整篇練習換頁呼叫) */
-function renderLyricsCore() {
-    if (!state.article || !state.article.paragraphs) {
-        console.warn('[renderLyrics] 警告：尚未載入文章資料，取消渲染');
-        return;
-    }
-
-    const view     = document.getElementById('lyricsView');
-    const progress = document.getElementById('paragraphProgress');
-    const paras    = state.article.paragraphs || [];
-    const cur      = state.currentParagraph || 0;
-    const isWhole  = state.practiceMode === 'whole';
-
-    if (progress) {
-        progress.textContent = `段落 ${cur + 1} / ${paras.length}`;
-    }
-
-    if (!view) return;
-
-    view.innerHTML = paras.map((text, i) => {
-        let cls = 'lyric-para ';
-        if      (i < cur)   cls += 'lyric-past';
-        else if (i === cur) cls += 'lyric-current';
-        else                cls += 'lyric-future';
-
-        const sentences = splitIntoSentences(text);
-
-        // 💡 核心修改：幫每個句子的 span 加上 onclick 事件，並傳入轉義後的字串
-        const sentenceHtml = sentences
-            .map(s => `${s}`)
-            .map(s => {
-                // 將句子中的單雙引號轉義，避免 HTML 屬性解析出錯
-                const safeSentence = s.replace(/'/g, "\\'").replace(/"/g, '&quot;');
-                return `<span class="lyric-sentence" style="cursor: pointer;" onclick="speakSentence('${safeSentence}')" title="點擊朗讀此句">${s}</span>`;
-            })
-            .join('');
-
-        // 💡 整篇練習模式：每段右下角提供「下一段」箭頭，非第一段則左下角提供「上一段」箭頭
-        //    （純粹切換顯示，不影響錄音進行中的狀態）
-        let navHtml = '';
-        if (isWhole) {
-            const hasPrev = i > 0;
-            const hasNext = i < paras.length - 1;
-            navHtml += '<div class="lyric-nav-arrows">';
-            if (hasPrev) {
-                navHtml += `<button type="button" class="lyric-nav-arrow lyric-nav-prev" title="上一段" onclick="event.stopPropagation(); switchWholeParagraphView(${i - 1});">&#8592;</button>`;
-            } else {
-                navHtml += `<span class="lyric-nav-arrow lyric-nav-placeholder"></span>`;
-            }
-            if (hasNext) {
-                navHtml += `<button type="button" class="lyric-nav-arrow lyric-nav-next" title="下一段" onclick="event.stopPropagation(); switchWholeParagraphView(${i + 1});">&#8594;</button>`;
-            } else {
-                navHtml += `<span class="lyric-nav-arrow lyric-nav-placeholder"></span>`;
-            }
-            navHtml += '</div>';
-        }
-
-        return `<div class="${cls}" data-para-idx="${i}">${sentenceHtml}${navHtml}</div>`;
-    }).join('');
-
-    if (window.ParagraphUI) {
-        ParagraphUI.setTotal(paras.length, state.activeProjectId);
-        ParagraphUI.setCurrentIdx(cur);
-    }
-
-    const curEl = view.querySelector('.lyric-current');
-    if (curEl) {
-        // 💡 只捲動字幕容器本身（不要用 scrollIntoView，它會連外層頁面一起捲、把上緣頂掉）。
-        //    一律「對齊目前段落頂端」：目前段落的第一句永遠貼在字幕區上方、不會被推出畫面，
-        //    其餘內容往下自由捲動閱讀。（未錄音頁在整篇模式尤其重要：不會把上面的段落吸走害你看不到開頭）
-        const TOP_GAP  = 16;   // 段落上緣與字幕區頂端保留的一點緩衝
-        const isFirst  = curEl.dataset.paraIdx === '0' || !curEl.previousElementSibling;
-        let targetTop  = isFirst ? 0 : (curEl.offsetTop - TOP_GAP);
-
-        const maxTop = Math.max(0, view.scrollHeight - view.clientHeight);
-        targetTop = Math.max(0, Math.min(targetTop, maxTop));
-        view.scrollTo({ top: targetTop, behavior: 'smooth' });
-    }
-
-    if (window._isMasked) {
-        const targetIdx = (typeof state.currentParagraph === 'number') ? state.currentParagraph : 0;
-        _updateMaskSlots(targetIdx);
-    }
-}
 
 /** Render all paragraph cards in #lyricsView + 更新錄音按鈕鎖定狀態（僅分段練習模式需要） */
-function renderLyrics() {
-    renderLyricsCore();
-    if (!state.article || !state.article.paragraphs) return;
-
-    // 💡 整篇練習模式只有「一整段」錄音，不依段落鎖定錄音按鈕
-    if (state.practiceMode === 'whole') return;
-
-    const recordBtn = document.getElementById('recordBtn');
-    const currentProj = state.projects[state.activeProjectId];
-    const isRecorded = currentProj?.recordedSet?.has(state.currentParagraph + 1);
-
-    if (isRecorded) {
-        if (recordBtn) {
-            recordBtn.classList.add('locked');
-            recordBtn.innerHTML = '<span>🔒 已完成錄音</span>';
-            recordBtn.style.pointerEvents = 'none';
-            recordBtn.style.opacity = '0.6';
-        }
-    } else {
-        if (recordBtn) {
-            recordBtn.classList.remove('locked');
-            recordBtn.innerHTML = '<span class="record-dot-anim"></span><span id="recordBtnText">開始錄音</span>';
-            recordBtn.style.pointerEvents = 'auto';
-            recordBtn.style.opacity = '1';
-        }
-    }
-}
 
 /**
  * 💡 整篇練習模式專用：僅切換段落文字/圖片提示的顯示，完全不影響錄音狀態
  * （不呼叫 resetRecordUI，不查詢/載入該段落的既有音檔，錄音中可直接切換不中斷）
  */
-function switchWholeParagraphView(idx) {
-    if (!state.article || !state.article.paragraphs) return;
-    if (idx < 0 || idx >= state.article.paragraphs.length) return;
-    state.currentParagraph = idx;
-    renderLyricsCore();
-}
 
 /** Reset all recording UI back to the idle state */
-function resetRecordUI() {
-    clearInterval(state.timerInterval);
-    state.timerSeconds  = 0;
-    state.isRecording   = false;
-    state.recordingBlob = null;
-    state.audioChunks   = [];
-    state.recordState   = 'idle';
-    recordedSegments    = []; // 清空碎片庫
-
-    const timerEl = document.getElementById('recordTimer');
-    if (timerEl) { timerEl.textContent = '00:00'; timerEl.classList.remove('running'); }
-
-    const btn = document.getElementById('recordBtn');
-    if (btn) {
-        btn.classList.remove('recording', 'paused');
-        btn.innerHTML = '<span class="record-dot-anim"></span><span id="recordBtnText">開始錄音</span>';
-        btn.style.pointerEvents = 'auto';
-        btn.style.opacity = '1';
-        btn.style.display = 'flex';
-    }
-
-    const playbackRow = document.getElementById('playbackRow');
-    if (playbackRow) playbackRow.classList.remove('visible');
-    const uploadBtn = document.getElementById('uploadAudioBtn');
-    if (uploadBtn) uploadBtn.classList.remove('visible');
-
-    const clearBtn = document.getElementById('clearRecordBtn');
-    if (clearBtn) clearBtn.style.display = 'none';
-
-    const audio = document.getElementById('playbackAudio');
-    if (audio) { audio.pause(); audio.removeAttribute('src'); audio.load(); }
-    const scoreText = document.getElementById('werScoreText');
-
-    if (scoreText) scoreText.textContent = '0.0%';
-}
 
 /** 💡 核心三段分流控制 - 精準判定自訂狀態 */
-function toggleRecord() {
-    console.log("按鈕點擊，當前錄音狀態機:", state.recordState);
-    if (state.recordState === 'idle') {
-        startRecordingSegment();
-    } else if (state.recordState === 'recording') {
-        pauseRecordingSegment();
-    } else if (state.recordState === 'paused') {
-        startRecordingSegment(); // 暫停後再按，就是繼續錄製下一段碎片
-    }
-}
 
 // ── 1. 開始錄製（全新錄音 或 繼續錄製下一句） ──
-async function startRecordingSegment() {
-    try {
-        currentStream = await navigator.mediaDevices.getUserMedia({
-            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
-        });
-
-        state.audioChunks = [];
-        const options = { mimeType: 'audio/webm;codecs=opus' };
-        if (!MediaRecorder.isTypeSupported(options.mimeType)) delete options.mimeType;
-
-        state.mediaRecorder = new MediaRecorder(currentStream, options);
-
-        state.mediaRecorder.ondataavailable = (e) => {
-            if (e.data.size > 0) state.audioChunks.push(e.data);
-        };
-
-        // 💡 煞車按鈕按下去（實質 stop）時觸發
-        state.mediaRecorder.onstop = async () => {
-            // 徹底切斷麥克風軌道！4-7秒期間硬體完全不收音，背景音雜音絕對塞不進來
-            currentStream.getTracks().forEach(t => t.stop());
-
-            const segmentBlob = new Blob(state.audioChunks, { type: state.mediaRecorder.mimeType });
-            recordedSegments.push(segmentBlob); // 存入碎片庫
-
-            // 拼接所有講話的碎片，立即畫出並展現波形
-            await refreshCombinedWaveform();
-        };
-
-        // 如果是第一次錄音，初始化碎片庫與計時
-        if (state.recordState === 'idle') {
-            recordedSegments = [];
-            state.timerSeconds = 0;
-        }
-
-        state.mediaRecorder.start();
-        state.recordState = 'recording';
-        state.isRecording = true;
-
-        // 啟動計時器
-        clearInterval(state.timerInterval);
-        startRecordTimer();
-        updateRecordBtnUI();
-
-        // 隱藏確認按鈕
-        const uploadAudioBtn = document.getElementById('uploadAudioBtn');
-        if (uploadAudioBtn) uploadAudioBtn.classList.remove('visible');
-
-    } catch (err) {
-        showToast('無法存取麥克風，請確認權限');
-        console.error(err);
-    }
-}
 
 // ── 2. 按下暫停（精準煞車，徹底關閉硬體收音） ──
-function pauseRecordingSegment() {
-    if (!state.mediaRecorder || state.recordState !== 'recording') return;
-
-    // 1. 立即停止計時定時器（秒數絕對鎖死在 4 秒，不准往前）
-    clearInterval(state.timerInterval);
-    const timerEl = document.getElementById('recordTimer');
-    if (timerEl) timerEl.classList.remove('running');
-
-    // 2. 實質切斷麥克風包裹，進入安全暫停狀態
-    state.recordState = 'paused';
-    state.isRecording = false;
-    state.mediaRecorder.stop(); // 👈 觸發上面的 onstop
-
-    updateRecordBtnUI();
-    showToast('已精準暫停！秒數已鎖定，可試聽下方波形 🎤');
-}
 
 // ── 3. 將多段碎片無縫拼接並渲染 WaveSurfer ──
-async function refreshCombinedWaveform() {
-    if (recordedSegments.length === 0) return;
-
-    // 將所有暫存的有效說話碎片拼成一個完整的大音檔
-    const combinedBlob = new Blob(recordedSegments, { type: recordedSegments[0].type });
-    state.recordingBlob = combinedBlob; // 供最終上傳使用
-
-    const url = URL.createObjectURL(combinedBlob);
-
-    initWaveform();
-    if (wavesurfer) wavesurfer.load(url);
-
-    const audioEl = document.getElementById('playbackAudio');
-    if (audioEl) audioEl.src = url;
-
-    // 展開播放列與上傳確認按鈕
-    const playbackRow = document.getElementById('playbackRow');
-    const uploadAudioBtn = document.getElementById('uploadAudioBtn');
-    if (playbackRow) playbackRow.classList.add('visible');
-    if (uploadAudioBtn) uploadAudioBtn.classList.add('visible');
-}
 
 // ── 4. 停止錄音輔助 ──
-function stopRecording() {
-    clearInterval(state.timerInterval);
-    if (state.mediaRecorder && state.mediaRecorder.state !== 'inactive') {
-        state.mediaRecorder.stop();
-    }
-    state.recordState = 'idle';
-    state.isRecording = false;
-}
 
 // ── 5. 全部重錄後悔藥 ──
-function clearCurrentProgress() {
-    stopRecording();
-    recordedSegments = [];
-    resetRecordUI();
-    updateRecordBtnUI();
-    showToast('已清空當前錄音 🔄');
-}
 
-function startRecordTimer() {
-    const timerEl = document.getElementById('recordTimer');
-    if (!timerEl) return;
 
-    timerEl.classList.add('running');
-    clearInterval(state.timerInterval);
-
-    state.timerInterval = setInterval(() => {
-        state.timerSeconds++;
-        const m = String(Math.floor(state.timerSeconds / 60)).padStart(2, '0');
-        const s = String(state.timerSeconds % 60).padStart(2, '0');
-        timerEl.textContent = `${m}:${s}`;
-    }, 1000);
-}
-
-function updateRecordBtnUI() {
-    const btn = document.getElementById('recordBtn');
-    const text = document.getElementById('recordBtnText');
-    const clearBtn = document.getElementById('clearRecordBtn');
-
-    if (state.recordState === 'idle') {
-        if(btn) btn.className = 'record-btn';
-        if(text) text.textContent = '開始錄音';
-        if(clearBtn) clearBtn.style.display = 'none';
-    }
-    else if (state.recordState === 'recording') {
-        if(btn) btn.className = 'record-btn recording';
-        if(text) text.textContent = '⏸ 暫停 (念完一句點此)';
-        if(clearBtn) clearBtn.style.display = 'inline-block';
-    }
-    else if (state.recordState === 'paused') {
-        if(btn) btn.className = 'record-btn paused';
-        if(text) text.textContent = '▶ 繼續錄音 (往下念)';
-        if(clearBtn) clearBtn.style.display = 'inline-block';
-    }
-}
 
 /** 按下確認上傳鍵：如果還在錄音，幫他自動封裝收尾並傳送 */
 // ══════════════════════════════════════════════════
@@ -1022,216 +319,10 @@ function updateRecordBtnUI() {
  *    「這個上傳工作(progress_id)目前真正跑到哪個階段」得到的真實回應，
  *    不是前端自己猜的固定動畫。
  */
-function showUploadProgress(progressId) {
-    let overlay = document.getElementById('uploadProgressOverlay');
-    if (!overlay) {
-        overlay = document.createElement('div');
-        overlay.id = 'uploadProgressOverlay';
-        overlay.style.cssText = 'margin-top:12px; padding:14px 18px; background:#eff6ff; border:1px solid #bfdbfe; border-radius:10px; display:flex; align-items:center; gap:10px;';
-        overlay.innerHTML = `
-            <div style="width:18px; height:18px; border:3px solid #bfdbfe; border-top-color:#2563eb; border-radius:50%; animation: uploadSpin 0.8s linear infinite; flex-shrink:0;"></div>
-            <span id="uploadProgressText" style="font-size:0.85rem; color:#1e40af; font-weight:bold;">正在上傳錄音...</span>
-        `;
-        if (!document.getElementById('uploadProgressStyle')) {
-            const styleTag = document.createElement('style');
-            styleTag.id = 'uploadProgressStyle';
-            styleTag.textContent = `@keyframes uploadSpin { to { transform: rotate(360deg); } }`;
-            document.head.appendChild(styleTag);
-        }
-        const uploadBtnEl = document.getElementById('uploadAudioBtn');
-        if (uploadBtnEl && uploadBtnEl.parentNode) {
-            uploadBtnEl.parentNode.insertBefore(overlay, uploadBtnEl.nextSibling);
-        } else {
-            document.body.appendChild(overlay);
-        }
-    }
-    overlay.style.display = 'flex';
 
-    // 💡 每隔約 1 秒問後端一次「這個 progress_id 現在真正跑到哪」，拿到什麼就顯示什麼
-    clearInterval(window._uploadProgressTimer);
-    window._uploadProgressTimer = setInterval(async () => {
-        try {
-            const resp = await fetch(`/upload_progress/${progressId}?t=${Date.now()}`, { cache: 'no-store' });
-            const data = await resp.json();
-            if (data.status === 'success' && data.stage) {
-                const textEl = document.getElementById('uploadProgressText');
-                if (textEl) textEl.textContent = data.stage;
-            }
-        } catch (e) {
-            // 輪詢失敗就靜默略過，不要因為這個把整個上傳流程打斷
-        }
-    }, 1000);
-}
 
-function hideUploadProgress() {
-    clearInterval(window._uploadProgressTimer);
-    const overlay = document.getElementById('uploadProgressOverlay');
-    if (overlay) overlay.style.display = 'none';
-}
 
-async function uploadAudio() {
-    // 🔧 核心修正：按鈕禁用要在「最開頭」就做，不能等到錄音停止的非同步流程跑完才做！
-    //    原本的寫法是：先等錄音停止(await) → 才禁用按鈕 → 才上傳。
-    //    這段等待期間按鈕還是可以點的，如果使用者連點兩下（或手機誤觸），
-    //    會觸發兩個各自獨立執行的 uploadAudio()，同一段音檔被送出兩次，
-    //    後端 Ollama 也會被呼叫兩次，資料庫最後只會留下「後面那次」覆蓋掉的結果——
-    //    這就是為什麼你會在 log 裡看到同一次上傳卻打了兩次 Ollama。
-    const btn = document.getElementById('uploadAudioBtn');
-    if (btn && btn.disabled) {
-        // 💡 防止重複進入：按鈕已經是禁用狀態，代表已經有一個上傳正在跑，直接忽略這次呼叫
-        console.warn('⚠️ 已經有一個上傳正在進行中，忽略這次重複觸發');
-        return;
-    }
-    if (btn) { btn.disabled = true; btn.textContent = '上傳中…'; }
 
-    if (state.recordState === 'recording' && state.mediaRecorder && state.mediaRecorder.state !== 'inactive') {
-        const finalizePromise = new Promise(resolve => {
-            state.mediaRecorder.onstop = async () => {
-                const segmentBlob = new Blob(state.audioChunks, { type: state.mediaRecorder.mimeType });
-                recordedSegments.push(segmentBlob);
-                await refreshCombinedWaveform();
-                resolve();
-            };
-        });
-        state.mediaRecorder.stop();
-        state.recordState = 'idle';
-        await finalizePromise;
-    }
-
-    if (!state.recordingBlob) {
-        showToast('請先錄音再上傳');
-        if (btn) { btn.disabled = false; btn.textContent = '✓ 上傳並繼續'; }
-        return;
-    }
-
-    try {
-        const wavBlob = await convertToWav16k(state.recordingBlob);
-        const projectId = state.activeProjectId;
-        if (!projectId) {
-            showToast('錯誤：找不到當前專案 ID');
-            if (btn) { btn.disabled = false; btn.textContent = '✓ 上傳並繼續'; }
-            return;
-        }
-
-        const profile = JSON.parse(localStorage.getItem('userProfile') || '{}');
-        let username = profile.username || document.getElementById('profileUsername')?.value || "guest";
-        const articleName = state.article ? state.article.title : "unknown";
-        const mode = _loadPracticeModeForProject(projectId) || 'segment';
-        const currentPara = (mode === 'whole') ? 0 : (state.currentParagraph + 1);
-
-        // --- 📥 動作 A：維持你原本的送出存檔 (只傳給你的 5000 後端，8000 port 交給後端打電話就行！) ---
-        const progressId = `p_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`; // 💡 這次上傳的一次性識別碼，供輪詢真實進度用
-
-        const formDataMyBackend = new FormData();
-        formDataMyBackend.append("audio_data", wavBlob);
-        formDataMyBackend.append("project_id", projectId);
-        formDataMyBackend.append("username", username);
-        formDataMyBackend.append("article_name", articleName);
-        formDataMyBackend.append("paragraph_index", currentPara);
-        formDataMyBackend.append("mode", mode);
-        formDataMyBackend.append("progress_id", progressId);
-        console.log(`正在上傳... 模式: ${mode}, 段落索引: ${currentPara}`);
-
-        showUploadProgress(progressId);
-
-        console.log("正在送出音檔至 Flask 後端處理...");
-        const response = await fetch('/upload_audio', { method: 'POST', body: formDataMyBackend });
-        const result = await response.json();
-
-        // --- 🏁 核心主流程收尾與報表渲染 (在 main.js 內 uploadAudio 成功接收處) ---
-        if (response.ok && result.status === 'success') {
-            state.recordings[state.currentParagraph] = state.recordingBlob;
-
-            if (window.ParagraphUI) ParagraphUI.markRecorded(state.currentParagraph);
-
-            if (result.wer_result && result.wer_result.statistics) {
-                // 補丁安全防禦：如果後端 statistics 裡沒有 npvi/varco/Ollama評分，把外層實體算好的分數注入進去
-                if (result.wer_result.npvi !== undefined) {
-                    result.wer_result.statistics.npvi = result.wer_result.npvi;
-                }
-                if (result.wer_result.varco !== undefined) {
-                    result.wer_result.statistics.varco = result.wer_result.varco;
-                }
-                // 💡 新增：四個 Ollama 評分維度（完整度/準確度/流利度/語法），供雷達圖使用
-                result.wer_result.statistics.score_completeness = result.wer_result.score_completeness ?? 0;
-                result.wer_result.statistics.score_accuracy = result.wer_result.score_accuracy ?? 0;
-                result.wer_result.statistics.score_fluency = result.wer_result.score_fluency ?? 0;
-                result.wer_result.statistics.score_grammar = result.wer_result.score_grammar ?? 0;
-                result.wer_result.statistics.overall_fluency_score_100 = result.wer_result.overall_fluency_score_100 ?? 0;
-                result.wer_result.statistics.fluency_feedback_text = result.wer_result.fluency_feedback_text || '';
-                result.wer_result.statistics.wer_feedback_text = result.wer_result.wer_feedback_text || '';
-
-                // 呼叫單段即時更新器
-                renderWerReportToPanel3(
-                    result.wer_result.alignment_report,
-                    result.wer_result.statistics,
-                    currentPara,
-                    result.url
-                );
-                showToast(`段落 ${currentPara} 儲存與雙 AI 分析成功！🎉`);
-            } else {
-                showToast(`段落 ${currentPara} 儲存成功 (分析未完成)`);
-            }
-
-            const isLast = (state.practiceMode === 'whole')
-                ? true
-                : state.currentParagraph >= (state.article.paragraphs.length - 1);
-            if (isLast) {
-                showToast('全部錄音完成！快來看看 AI 流暢度分析報告吧 🎉');
-
-                if (state.practiceMode === 'whole' && result.wer_result && result.wer_result.statistics) {
-                    // 💡 整篇模式：不要再呼叫 settleAndShowReport() 去後端 /get_project_total_report 抓「平均」，
-                    //    那支 API 目前無法正確辨識整篇錄音這一筆資料，算出來的平均永遠是 0。
-                    //    這裡直接拿這次上傳完成、後端即時回傳的分析結果寫進總成績卡，不經過任何平均計算。
-                    state.completedSteps.add(2);
-                    state.currentStep = 2;
-                    updateStepUI();
-                    renderWholeReportDirectly(
-                        result.wer_result,
-                        result.url
-                    );
-                } else if (typeof settleAndShowReport === 'function') {
-                    await settleAndShowReport();
-                } else {
-                    state.completedSteps.add(2);
-                    state.currentStep = 2;
-                    updateStepUI();
-                }
-            } else {
-                await goToParagraph(state.currentParagraph + 1);
-            }
-        } else {
-            throw new Error(result.message || "伺服器拒絕請求");
-        }
-    } catch (error) {
-        console.error("上傳失敗細節:", error);
-        showToast("上傳失敗: " + error.message);
-    } finally {
-        if (btn) { btn.disabled = false; btn.textContent = '✓ 上傳並繼續'; }
-        hideUploadProgress();
-    }
-}
-
-function restoreRecordedBadges() {
-    if (!window.ParagraphUI) return;
-    const currentProj = state.projects[state.activeProjectId];
-    if (currentProj?.recordedSet) {
-        currentProj.recordedSet.forEach(idx => {
-            window.ParagraphUI.markRecorded(idx - 1);
-        });
-    }
-    if (Array.isArray(state.recordings)) {
-        state.recordings.forEach((blob, i) => {
-            if (blob) window.ParagraphUI.markRecorded(i);
-        });
-    }
-}
-
-function _refreshStep2() {
-    if (!state.article) return;
-    renderLyrics();
-    restoreRecordedBadges();
-}
 
 
 
@@ -1241,81 +332,9 @@ function _refreshStep2() {
 
 
 
-function saveSession() {
-    if (!state.article) return;
-    const key = `sessions_${state.article.title}`;
-    const sessions = JSON.parse(localStorage.getItem(key) || '[]');
-    sessions.push({
-        date: new Date().toLocaleDateString('zh-TW'),
-        time: new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' }),
-        paragraphs: state.article.paragraphs.length,
-        score: null
-    });
-    localStorage.setItem(key, JSON.stringify(sessions));
 
-    const allHistory = JSON.parse(localStorage.getItem('allHistory') || '[]');
-    allHistory.unshift({
-        title: state.article.title,
-        emoji: state.article.emoji,
-        date: new Date().toLocaleDateString('zh-TW')
-    });
-    localStorage.setItem('allHistory', JSON.stringify(allHistory.slice(0, 50)));
-    loadHistory();
-    updateReadingCount();
-}
 
-function loadHistory() {
-    const all = JSON.parse(localStorage.getItem('allHistory') || '[]');
-    const list = document.getElementById('historyList');
-    if (all.length === 0) {
-        list.innerHTML = '<li class="history-item muted">尚無練習紀錄</li>';
-        return;
-    }
-    list.innerHTML = all.map((h, i) =>
-        `<li class="history-item${i === 0 ? ' active' : ''}">
-            <span>${h.emoji || '📄'} ${h.title}</span>
-            <small>${h.date}</small>
-        </li>`
-    ).join('');
-}
 
-function updateReadingCount() {
-    if (!state.article) return;
-    const key = `sessions_${state.article.title}`;
-    const sessions = JSON.parse(localStorage.getItem(key) || '[]');
-    document.getElementById('readingCountNum').textContent = sessions.length + 1;
-
-    const listEl = document.getElementById('readingHistoryList');
-    if (sessions.length === 0) {
-        listEl.innerHTML = '<p class="dropdown-empty">✨ 這是您第一次練習這篇文章！</p>';
-    } else {
-        listEl.innerHTML = sessions.map((s, i) =>
-            `<div class="dropdown-session">
-                <span class="ds-num">第 ${i + 1} 次</span>
-                <span class="ds-date">${s.date} ${s.time}</span>
-                <span class="ds-score">${s.score !== null ? s.score + ' 分' : '待評'}</span>
-            </div>`
-        ).join('');
-    }
-}
-
-function newSession() {
-    state.article          = null;
-    state.currentStep      = 0;
-    state.currentParagraph = 0;
-    state.completedSteps   = new Set([0]);
-    state.recordings       = [];
-    setPracticeMode('segment');
-    resetRecordUI();
-    _resetScorePanel();
-    document.getElementById('chatTitle').textContent = '選擇文章開始練習';
-    document.getElementById('startBtn').disabled = true;
-    document.getElementById('selectedPreview').classList.remove('visible');
-    document.querySelectorAll('.article-card').forEach(c => c.classList.remove('selected'));
-    document.getElementById('readingCountNum').textContent = '—';
-    document.getElementById('readingHistoryList').innerHTML = '<p class="dropdown-empty">請先選擇文章</p>';
-    updateStepUI();
-}
 
 // ══════════════════════════════════════════════════
 //  TOAST

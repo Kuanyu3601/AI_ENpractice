@@ -45,43 +45,11 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // ========================================================
-//  PWA：註冊 Service Worker + 安裝提示
-//  👉 把這整段接到 static/js/navbar.js 的「最後面」
+//  💡 PWA 的 Service Worker 註冊、安裝提示處理，
+//     已經統一放在 main.js 裡處理了（避免兩邊各註冊一次、
+//     也避免這裡原本 beforeinstallprompt 攔截邏輯在沒有對應
+//     #installBtn 按鈕的情況下，把瀏覽器原生的安裝提示攔截掉、
+//     卻沒有任何東西可以手動觸發，導致安裝按鈕永遠不會出現）。
+//     這裡不再重複處理，如果之後想加自訂安裝按鈕，直接在 main.js
+//     那份 PWA 註冊邏輯旁邊加，不要在這裡另外寫一份。
 // ========================================================
-
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js')
-      .then((reg) => console.log('✅ SW 註冊成功，範圍：', reg.scope))
-      .catch((err) => console.error('❌ SW 註冊失敗：', err));
-  });
-} else {
-  console.warn('⚠️ 這個瀏覽器不支援 Service Worker');
-}
-
-// ── 自訂安裝按鈕（選配）──
-// 若 HTML 裡有 <button id="installBtn"> 就會用它；沒有也不會報錯。
-let deferredPrompt;
-
-window.addEventListener('beforeinstallprompt', (e) => {
-  e.preventDefault();
-  deferredPrompt = e;
-  const btn = document.getElementById('installBtn');
-  if (btn) btn.style.display = 'block';
-});
-
-window.addEventListener('DOMContentLoaded', () => {
-  const btn = document.getElementById('installBtn');
-  if (!btn) return;
-  btn.addEventListener('click', async () => {
-    if (!deferredPrompt) return;
-    deferredPrompt.prompt();
-    await deferredPrompt.userChoice;
-    deferredPrompt = null;
-    btn.style.display = 'none';
-  });
-});
-
-window.addEventListener('appinstalled', () => {
-  console.log('🎉 PWA 已安裝');
-});

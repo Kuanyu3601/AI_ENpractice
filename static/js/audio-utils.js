@@ -6,21 +6,23 @@
 // ══════════════════════════════════════════════════
 //  WAV ENCODER  (16 kHz mono)
 // ══════════════════════════════════════════════════
-async function convertToWav16k(blob) {
+/**
+ * 💡 把一段錄音 Blob 解碼、重新取樣成 16kHz 單聲道，回傳「原始 PCM 樣本」(Float32Array)，
+ *    還沒包成 WAV。這是共用的核心步驟，抽出來是因為「合併多段錄音」時
+ *    （見 recorder.js 的 refreshCombinedWaveform）不能直接拼接壓縮過的位元組，
+ *    必須先把每一段各自解碼成 PCM，PCM 才能安全地首尾接起來。
+ */
+async function decodeBlobToPcm16k(blob) {
     const arrayBuffer = await blob.arrayBuffer();
-    // 1. 建立 AudioContext
     const tmpCtx = new (window.AudioContext || window.webkitAudioContext)();
 
-    // 2. 重要：檢查狀態並喚醒 (解決 Chrome 靜音問題)
     if (tmpCtx.state === 'suspended') {
         await tmpCtx.resume();
     }
 
     try {
-        // 3. 解碼原始錄音資料 (WebM -> PCM)
         const decoded = await tmpCtx.decodeAudioData(arrayBuffer);
 
-        // 4. 重採樣至 16000Hz (專題要求的規格)
         const SR = 16000;
         const numSamples = Math.round(decoded.duration * SR);
         const offCtx = new OfflineAudioContext(1, numSamples, SR);
@@ -31,18 +33,20 @@ async function convertToWav16k(blob) {
         src.start();
 
         const rendered = await offCtx.startRendering();
-        await tmpCtx.close(); // 釋放記憶體
+        await tmpCtx.close();
 
-        // 5. 檢查數據是否有聲音 (Debug 用)
-        const pcmData = rendered.getChannelData(0);
-        console.log('[WAV轉碼] 第一個樣本點:', pcmData[0]);
-
-        return pcmToWav(pcmData, SR);
+        return rendered.getChannelData(0);
     } catch (e) {
         console.error("解碼失敗，可能是錄音檔毀損:", e);
         await tmpCtx.close();
         throw e;
     }
+}
+
+async function convertToWav16k(blob) {
+    const pcmData = await decodeBlobToPcm16k(blob);
+    console.log('[WAV轉碼] 第一個樣本點:', pcmData[0]);
+    return pcmToWav(pcmData, 16000);
 }
 
 function pcmToWav(samples, sampleRate) {
@@ -69,6 +73,3 @@ function pcmToWav(samples, sampleRate) {
     }
     return new Blob([buf], { type: 'audio/wav' });
 }
-
-
-

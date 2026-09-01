@@ -2,6 +2,52 @@
 //  上傳與進度
 // ══════════════════════════════════════════════════
 
+/**
+ * 💡 【核心新增】：「查看結論」按鈕觸發的函式。
+ *    不管現在錄了幾段（可能只錄完第 1 段、也可能全部錄完），都可以呼叫，
+ *    後端 /generate_project_llm_summary 會自動判斷「哪些段落還沒有 LLM 結果」，
+ *    只針對那些段落產生評分與回饋，已經產生過的段落不會被重新呼叫、也不會被覆蓋。
+ */
+async function viewConclusion() {
+    const projectId = state.activeProjectId;
+    if (!projectId) {
+        showToast('錯誤：找不到當前專案 ID');
+        return;
+    }
+
+    const btn = document.getElementById('skipToResultBtn');
+    if (btn && btn.disabled) return; // 防止重複點擊
+    if (btn) { btn.disabled = true; btn.textContent = '產生中…'; }
+
+    const progressId = `p_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    showUploadProgress(progressId);
+
+    try {
+        const formData = new FormData();
+        formData.append('project_id', projectId);
+        formData.append('progress_id', progressId);
+
+        const response = await fetch('/generate_project_llm_summary', { method: 'POST', body: formData });
+        const result = await response.json();
+
+        if (result.status === 'success') {
+            if (result.processed_count > 0) {
+                showToast(`已為 ${result.processed_count} 段新錄音產生 AI 評分與建議 🎉`);
+            } else {
+                showToast('目前所有段落都已經有結果了，直接顯示報告 🎉');
+            }
+            await settleAndShowReport();
+        } else {
+            throw new Error(result.message || '產生結論失敗');
+        }
+    } catch (error) {
+        console.error('查看結論失敗:', error);
+        showToast('查看結論失敗: ' + error.message);
+    } finally {
+        hideUploadProgress();
+        if (btn) { btn.disabled = false; btn.textContent = '📊 查看結論'; }
+    }
+}
 
 /** 按下確認上傳鍵：如果還在錄音，幫他自動封裝收尾並傳送 */
 // ══════════════════════════════════════════════════
