@@ -26,13 +26,16 @@ function initTTS() {
             return;
         }
 
-        // 讀取當前段落文字（優先取 .lyric-sentence，避免整篇練習模式的換頁箭頭符號被誤讀）
+        // 讀取當前段落文字：改成只抓 .lyric-word（逐字span）重組句子，
+        // 避免每句開頭新加的大聲公 🔊 圖示（也在 .lyric-sentence 容器內）被一起讀出來。
         const curEl = document.querySelector('#lyricsView .lyric-current');
         if (!curEl) return;
 
         const sentenceEls = curEl.querySelectorAll('.lyric-sentence');
         const text = (sentenceEls.length
-                ? Array.from(sentenceEls).map(el => el.textContent.trim()).join(' ')
+                ? Array.from(sentenceEls).map(el =>
+                    Array.from(el.querySelectorAll('.lyric-word')).map(w => w.textContent).join(' ')
+                  ).join(' ')
                 : Array.from(curEl.childNodes)
                     .filter(n => n.nodeType === Node.TEXT_NODE)
                     .map(n => n.textContent.trim())

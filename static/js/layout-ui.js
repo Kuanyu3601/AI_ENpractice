@@ -231,6 +231,18 @@ window.ParagraphUI = (function () {
         refreshOverview();
     }
 
+    // 💡 【核心新增】：查看結論按鈕的啟用/禁用邏輯——
+    //    資料庫裡（或這次練習的暫存記錄）如果一段都還沒錄過，就不該讓使用者點得到這個按鈕，
+    //    不然點下去 /generate_project_llm_summary 會因為完全沒有資料可以處理，
+    //    跳出一個看起來很奇怪的空報告。
+    function _updateViewConclusionBtnState() {
+        const btn = document.getElementById('skipToResultBtn');
+        if (!btn) return;
+        const hasAnyRecorded = _recorded.size > 0;
+        btn.disabled = !hasAnyRecorded;
+        btn.title = hasAnyRecorded ? '' : '請先錄至少一段音檔，才能查看結論';
+    }
+
     // 暴露給外部的 API
     return {
         setTotal: function (n, key) {
@@ -250,10 +262,12 @@ window.ParagraphUI = (function () {
                 _currentIdx = 0;
             }
             buildOverview(); // 現在這裡就能找到了
+            _updateViewConclusionBtnState(); // 💡 換了新文章/新次數，重新判斷按鈕該不該禁用
         },
         markRecorded: function (idx) {
             _recorded.add(idx);
             refreshOverview();
+            _updateViewConclusionBtnState(); // 💡 真的錄完一段了，這裡才把按鈕打開
         },
         setCurrentIdx: function (idx) {
             _currentIdx = idx;
@@ -261,4 +275,3 @@ window.ParagraphUI = (function () {
         }
     };
 })();
-

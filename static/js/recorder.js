@@ -52,13 +52,24 @@ function renderLyricsCore() {
 
         const sentences = splitIntoSentences(text);
 
-        // 💡 核心修改：幫每個句子的 span 加上 onclick 事件，並傳入轉義後的字串
+        // 💡 核心修改：改成「逐字」可點擊，點擊只唸那一個字，不是整句。
+        //    外層還是保留 .lyric-sentence 這個容器（tts.js 的 initTTS() 整段朗讀按鈕
+        //    要靠這一層抓出完整句子文字，拿掉容器會讓那顆按鈕壞掉），
+        //    只是容器本身不再有 onclick，改成裡面每個字各自獨立可點擊。
+        //    另外在每一句最前面加一個大聲公圖示，點擊會唸出「整句」，
+        //    這樣使用者還是可以選擇聽單字發音、或聽整句唸法，兩者互不衝突。
         const sentenceHtml = sentences
-            .map(s => `${s}`)
             .map(s => {
-                // 將句子中的單雙引號轉義，避免 HTML 屬性解析出錯
-                const safeSentence = s.replace(/'/g, "\\'").replace(/"/g, '&quot;');
-                return `<span class="lyric-sentence" style="cursor: pointer;" onclick="speakSentence('${safeSentence}')" title="點擊朗讀此句">${s}</span>`;
+                // 用捕獲組切割，保留空白字元本身，字跟字之間才不會黏在一起
+                const words = s.split(/(\s+)/);
+                const wordSpans = words.map(w => {
+                    if (!w.trim()) return w; // 純空白直接原樣輸出，不用包 span
+                    const safeWord = w.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                    return `<span class="lyric-word" style="cursor: pointer;" onclick="event.stopPropagation(); speakSentence('${safeWord}')" title="點擊朗讀這個字">${w}</span>`;
+                }).join('');
+                const safeSentence = s.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                const speakerHtml = `<span class="lyric-sentence-speaker" onclick="event.stopPropagation(); speakSentence('${safeSentence}')" title="點擊朗讀整句">🔊</span>`;
+                return `<span class="lyric-sentence">${speakerHtml}${wordSpans}</span>`;
             })
             .join('');
 

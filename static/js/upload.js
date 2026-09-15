@@ -16,7 +16,7 @@ async function viewConclusion() {
     }
 
     const btn = document.getElementById('skipToResultBtn');
-    if (btn && btn.disabled) return; // 防止重複點擊
+    if (btn && btn.disabled) return; // 防止重複點擊，也順便擋住「還沒錄過任何一段」時被誤觸發的情況
     if (btn) { btn.disabled = true; btn.textContent = '產生中…'; }
 
     const progressId = `p_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -84,6 +84,9 @@ function showUploadProgress(progressId) {
     }
     overlay.style.display = 'flex';
 
+    // 💡 新增：上傳/處理期間，順便展開等待畫板，讓小朋友等待時可以畫畫打發時間
+    if (typeof showWhiteboard === 'function') showWhiteboard();
+
     // 💡 每隔約 1 秒問後端一次「這個 progress_id 現在真正跑到哪」，拿到什麼就顯示什麼
     clearInterval(window._uploadProgressTimer);
     window._uploadProgressTimer = setInterval(async () => {
@@ -104,6 +107,10 @@ function hideUploadProgress() {
     clearInterval(window._uploadProgressTimer);
     const overlay = document.getElementById('uploadProgressOverlay');
     if (overlay) overlay.style.display = 'none';
+
+    // 💡 新增：上傳/處理結束時，把畫板「縮小到側邊」而不是關掉——
+    //    小朋友畫的圖要保留下來，隨時可以點旁邊的小圖示繼續畫或看看自己畫了什麼。
+    if (typeof minimizeWhiteboard === 'function') minimizeWhiteboard();
 }
 
 async function uploadAudio() {

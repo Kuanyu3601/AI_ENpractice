@@ -1378,16 +1378,40 @@ body, html {
 }
 .lyrics-view::-webkit-scrollbar { display: none; }
 
-/* 💡 滑鼠移到句子上時的互動效果 */
+/* 💡 滑鼠移到句子上時的互動效果 —— 現在句子本身不再有 hover 效果了，
+   改成每個字獨立的 .lyric-word 才會反白（因為現在是逐字可點擊，不是整句） */
 .lyric-sentence {
-    transition: background-color 0.2s, color 0.2s;
     border-radius: 4px;
     padding: 2px 4px;
 }
 
-.lyric-sentence:hover {
-    background-color: rgba(52, 152, 219, 0.15) !important; /* 淡淡的藍色背景 */
-    color: #2c73c0 !important;                            /* 稍微加深文字顏色 */
+/* 💡 新增：逐字反白，只有滑鼠移到的那一個字會亮起來，不會整行一起反白 */
+.lyric-word {
+    transition: background-color 0.15s, color 0.15s;
+    border-radius: 3px;
+    padding: 1px 2px;
+}
+.lyric-word:hover {
+    background-color: rgba(52, 152, 219, 0.2) !important;
+    color: #2c73c0 !important;
+}
+
+/* 💡 新增：每句開頭的大聲公圖示，點擊唸出整句 */
+.lyric-sentence-speaker {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 0.85em;
+    margin-right: 4px;
+    vertical-align: middle;
+    opacity: 0.7;
+    transition: opacity 0.15s, transform 0.15s;
+    user-select: none;
+}
+.lyric-sentence-speaker:hover {
+    opacity: 1;
+    transform: scale(1.15);
 }
 
 /* ── Lyric paragraph base ── */
@@ -2751,5 +2775,159 @@ body, html {
     .metric-chip-grid > div {
         width: 100% !important;
         box-sizing: border-box !important;
+    }
+}
+
+/* ══════════════════════════════════════════════════
+   🎨 等待畫板（上傳/處理等待時間用）
+   ══════════════════════════════════════════════════ */
+.wait-whiteboard-panel {
+    position: fixed;
+    z-index: 2000;
+    background: #fff;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.18);
+    border: 1px solid #e2e8f0;
+    transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* 展開狀態：畫面右下角一個大面板 */
+.wait-whiteboard-panel.wb-expanded {
+    right: 20px;
+    bottom: 20px;
+    width: min(420px, 90vw);
+    height: min(360px, 60vh);
+    border-radius: 16px;
+    cursor: default;
+}
+
+/* 縮小狀態：貼在畫面右側邊緣的一個小圖示，點擊可以重新展開 */
+.wait-whiteboard-panel.wb-minimized {
+    right: 0;
+    bottom: 100px;
+    width: 52px;
+    height: 52px;
+    border-radius: 12px 0 0 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.wait-whiteboard-panel.wb-minimized::after {
+    content: '🎨';
+    font-size: 1.5rem;
+}
+.wait-whiteboard-panel.wb-minimized .wb-header,
+.wait-whiteboard-panel.wb-minimized .wb-toolbar,
+.wait-whiteboard-panel.wb-minimized .wb-canvas {
+    display: none;
+}
+.wait-whiteboard-panel.wb-minimized:hover {
+    width: 58px;
+    box-shadow: -4px 4px 16px rgba(0,0,0,0.22);
+}
+
+/* 💡 查看結論按鈕：還沒錄過任何一段時要明顯呈現「不能點」的樣子 */
+#skipToResultBtn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed !important;
+    background: #f1f5f9 !important;
+    color: #94a3b8 !important;
+    border-color: #e2e8f0 !important;
+}
+
+.wb-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    background: #fef2f2;
+    border-bottom: 1px solid #fecaca;
+    flex-shrink: 0;
+}
+.wb-title {
+    font-size: 0.85rem;
+    font-weight: bold;
+    color: #b91c1c;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.wb-header-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+.wb-btn {
+    border: none;
+    background: #fff;
+    border-radius: 8px;
+    width: 28px;
+    height: 28px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s;
+}
+.wb-btn:hover { background: #f1f5f9; }
+
+.wb-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 14px;
+    background: #fafafa;
+    border-bottom: 1px solid #f0f0f0;
+    flex-shrink: 0;
+}
+.wb-colors {
+    display: flex;
+    gap: 6px;
+}
+.wb-color-btn {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    border: 2px solid transparent;
+    cursor: pointer;
+    padding: 0;
+}
+.wb-color-btn.active {
+    border-color: #1d1d1d;
+    transform: scale(1.15);
+}
+.wb-size-slider {
+    flex: 1;
+    max-width: 100px;
+}
+
+.wb-canvas {
+    flex: 1;
+    width: 100%;
+    touch-action: none;
+    cursor: crosshair;
+    background:
+        linear-gradient(45deg, #fafafa 25%, transparent 25%),
+        linear-gradient(-45deg, #fafafa 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #fafafa 75%),
+        linear-gradient(-45deg, transparent 75%, #fafafa 75%);
+    background-size: 16px 16px;
+    background-position: 0 0, 0 8px, 8px -8px, -8px 0px;
+}
+
+@media (max-width: 768px) {
+    .wait-whiteboard-panel.wb-expanded {
+        right: 10px;
+        left: 10px;
+        bottom: 10px;
+        width: auto;
+        height: 40vh;
+    }
+    .wait-whiteboard-panel.wb-minimized {
+        bottom: 80px;
     }
 }
