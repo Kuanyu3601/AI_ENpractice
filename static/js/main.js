@@ -1314,9 +1314,9 @@ document.addEventListener('click', (e) => {
 //  📋 點擊「完整度/準確度/流利度」標籤 → 右側浮框顯示該分項 LLM 評語 + TTS
 // ══════════════════════════════════════════════════
 /**
- * 💡 把 0-10 的流暢度分數換算成「不流暢/待加強/流暢」等級文字。
+ * 💡 把 0-10 的流暢度分數換算成「不流暢/合格/流暢」等級文字。
  *    這個判斷邏輯要跟後端 app.py 的 score_to_fluency_tier() 保持完全一致：
- *    低於 5 分 = 不流暢 / 5~8 分 = 待加強 / 高於 8 分 = 流暢。
+ *    低於 5 分 = 不流暢 / 5~8 分 = 合格 / 高於 8 分 = 流暢。
  *    （分數計算時內部仍是對照文獻的初級/中級/高級門檻，只是顯示給使用者看的文字
  *    換成比較直覺的說法，兩者是同一套區間、只差在顯示字眼。）
  *    等級完全由分數落在哪個區間反推，後端不會另外存等級欄位。
@@ -1324,7 +1324,7 @@ document.addEventListener('click', (e) => {
 function scoreToFluencyTierLabel(score) {
     if (score == null || isNaN(score)) return '';
     if (score < 5) return { text: '不流暢', color: '#dc2626' };
-    if (score <= 8) return { text: '待加強', color: '#d97706' };
+    if (score <= 8) return { text: '合格', color: '#d97706' };
     return { text: '流暢', color: '#16a34a' };
 }
 

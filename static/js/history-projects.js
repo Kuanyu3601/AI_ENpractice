@@ -101,6 +101,11 @@ async function createNewProject(type) {
         newTitle = state.article.title;
         newArticle = JSON.parse(JSON.stringify(state.article));
 
+        // 💡 新增：這裡就是「複習練習」跟「新增文章」最關鍵的差異點——
+        //    完全不用讀取檔案、不用跑 processFile()，直接沿用記憶體裡現有的文章內容。
+        //    加這個提示，跟新增文章時的「文章載入成功」對應，方便截圖對照兩條路徑的差異。
+        showToast(`已自動導入舊文章「${newTitle}」📄，無需重新上傳，可直接開始練習`);
+
         const profile = JSON.parse(localStorage.getItem('userProfile') || '{"username":"guest"}');
         await fetch('/create_project', {
             method: 'POST',
@@ -408,5 +413,3 @@ function updateAttemptDropdown() {
         switchProject(targetId); // 這裡才會真正觸發音檔載入邏輯
     };
 }
-
-
