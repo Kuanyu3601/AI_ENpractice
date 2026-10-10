@@ -4,8 +4,12 @@ services:
     ports:
       - "5001:5000"
     environment:
-    # 👇 新增:告訴 Flask 去「主機上原生的 Ollama」找服務(Mac 才吃得到 GPU)
-    - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      # 👇 告訴 Flask 去「主機上原生的 Ollama」找服務(Mac 才吃得到 GPU)
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      # 🧪 效率對照測試開關（值從專案根目錄的 .env 讀取，沒設定時用預設值）
+      #    FLOW_MODE=split / legacy ；WHITEBOARD=on / off
+      - FLOW_MODE=${FLOW_MODE:-split}
+      - WHITEBOARD=${WHITEBOARD:-on}
     volumes:
       - .:/app
       - ./kids_recordings:/app/kids_recordings

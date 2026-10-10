@@ -11,9 +11,98 @@ import re
 import shutil
 import threading
 import time
+import csv
 
 app = Flask(__name__)
 app.secret_key = 'any_secret_string_here'
+
+# ══════════════════════════════════════════════════
+#  ⏱️ 效能計時資料擷取（寫入 CSV，供報告畫圖用）
+# ══════════════════════════════════════════════════
+# 💡 輸出位置：專案根目錄的 metrics/ 資料夾（因為 docker-compose 把整個專案目錄掛進容器，
+#    所以在主機上直接就看得到）。兩個檔案：
+#      backend_steps.csv ：後端每個處理步驟的耗時（長格式：一個步驟一列，方便做堆疊長條圖）
+#      client_events.csv ：前端量到的等待秒數、小白板使用情形
+#    寫入失敗只會印警告，不會影響主流程。
+# 🧪 效率對照測試用的「後台開關」（用環境變數設定，介面上看不到，小朋友不會被影響）：
+#    FLOW_MODE=split  → 新流程：上傳只做語音分析，點「查看結論」才跑 LLM（預設）
+#    FLOW_MODE=legacy → 舊流程重建：上傳後同一個請求內接著跑 LLM，一次等到全部做完
+#    WHITEBOARD=on/off → 等待時要不要顯示小白板（預設 on）
+FLOW_MODE = os.environ.get('FLOW_MODE', 'split').strip().lower()
+if FLOW_MODE not in ('split', 'legacy'):
+    FLOW_MODE = 'split'
+WHITEBOARD_ENABLED = os.environ.get('WHITEBOARD', 'on').strip().lower() not in ('off', '0', 'false', 'no')
+WHITEBOARD_LABEL = 'on' if WHITEBOARD_ENABLED else 'off'
+print(f"🧪 測試設定：FLOW_MODE={FLOW_MODE}, WHITEBOARD={WHITEBOARD_LABEL}", flush=True)
+
+METRICS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'metrics')
+BACKEND_STEPS_CSV = os.path.join(METRICS_DIR, 'backend_steps.csv')
+CLIENT_EVENTS_CSV = os.path.join(METRICS_DIR, 'client_events.csv')
+BACKEND_STEPS_HEADER = ['timestamp', 'flow_mode', 'whiteboard', 'phase', 'project_id', 'paragraph_index', 'step', 'duration_sec',
+                        'audio_sec', 'ref_words', 'hyp_words', 'idle_before_sec', 'note']
+CLIENT_EVENTS_HEADER = ['timestamp', 'flow_mode', 'whiteboard', 'event', 'session_label', 'project_id', 'paragraph_index',
+                        'wait_sec', 'strokes', 'draw_sec', 'note']
+_metrics_lock = threading.Lock()   # Flask 開了 threaded=True，多個請求可能同時寫檔，要加鎖
+_last_ollama_end = None            # 上一次 Ollama 呼叫結束的時間，用來推估「這次是不是冷啟動」
+
+_checked_headers = set()
+
+def _ensure_header_compatible(path, header):
+    """若既有 CSV 的欄位跟目前版本不同，把舊檔改名備份（不會刪除），再從新檔開始寫。"""
+    if path in _checked_headers:
+        return
+    _checked_headers.add(path)
+    if os.path.exists(path) and os.path.getsize(path) > 0:
+        with open(path, 'r', encoding='utf-8-sig') as f:
+            first_line = f.readline().strip()
+        if first_line != ','.join(header):
+            backup = path.replace('.csv', f".old_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+            os.replace(path, backup)
+            print(f"⚠️ {os.path.basename(path)} 欄位與新版不同，舊檔已改名備份為 {os.path.basename(backup)}", flush=True)
+
+def _append_csv_row(path, header, row):
+    try:
+        os.makedirs(METRICS_DIR, exist_ok=True)
+        with _metrics_lock:
+            _ensure_header_compatible(path, header)
+            new_file = (not os.path.exists(path)) or os.path.getsize(path) == 0
+            with open(path, 'a', newline='', encoding='utf-8-sig') as f:
+                w = csv.writer(f)
+                if new_file:
+                    w.writerow(header)
+                w.writerow(row)
+    except Exception as e:
+        print(f"⚠️ 寫入計時 CSV 失敗（不影響主流程）: {e}", flush=True)
+
+def _csv_safe(v, maxlen=200):
+    """防止以 = + - @ 開頭的字串被 Excel 當成公式執行，並限制長度。"""
+    s = '' if v is None else str(v)[:maxlen]
+    return ("'" + s) if s[:1] in ('=', '+', '-', '@') else s
+
+def log_step(phase, project_id, para_idx, step, t0, audio_sec='', ref_words='',
+             hyp_words='', idle_before_sec='', note=''):
+    """記錄一個步驟的耗時。t0 是該步驟開始時的 time.perf_counter()。"""
+    dur = round(time.perf_counter() - t0, 3)
+    _append_csv_row(BACKEND_STEPS_CSV, BACKEND_STEPS_HEADER, [
+        datetime.now().isoformat(timespec='seconds'), FLOW_MODE, WHITEBOARD_LABEL, phase, _csv_safe(project_id),
+        para_idx, step, dur, audio_sec, ref_words, hyp_words, idle_before_sec, _csv_safe(note)
+    ])
+    return dur
+
+def timed_call(phase, project_id, para_idx, step, fn, *args, ref_words='', hyp_words='', **kwargs):
+    """呼叫 fn(*args) 並把耗時寫進 CSV。idle_before_sec 是距離上一次 Ollama 呼叫結束過了幾秒，
+       空白代表伺服器啟動後第一次呼叫；數值很大（例如超過 300 秒）通常代表模型被卸載、這次是冷啟動。"""
+    global _last_ollama_end
+    idle = ''
+    if _last_ollama_end is not None:
+        idle = round(time.time() - _last_ollama_end, 1)
+    t0 = time.perf_counter()
+    try:
+        return fn(*args, **kwargs)
+    finally:
+        _last_ollama_end = time.time()
+        log_step(phase, project_id, para_idx, step, t0,
+                 ref_words=ref_words, hyp_words=hyp_words, idle_before_sec=idle)
 
 # ══════════════════════════════════════════════════
 #  ⏳ 上傳進度即時回報機制
@@ -771,6 +860,42 @@ def call_ollama_word_pronunciation_tip(reference_word, hypothesis_word, category
         return ""
 
 
+# ══════════════════════════════════════════════════
+#  📚 文獻參考數值（法語系英語學習者，三個程度）
+# ══════════════════════════════════════════════════
+# 來源：論文圖表，用 WebPlotDigitizer 抓取的近似值。
+# 原始是 0-1 尺度，這裡已經 ×100，對齊資料庫裡 npvi / varco 的尺度（例如平均 56.22），
+# 不然 Ollama 會拿 52 去跟 0.57 比較，評分會亂掉。
+# 每項為 (下界, 平均, 上界)，其中上下界是「該組平均值的 ±2SE」。
+FR_REF = {
+    '初級（不流暢）': {'npvi': (55.82, 57.19, 58.55), 'varco': (42.10, 43.03, 43.94)},
+    '中級（合格）':   {'npvi': (60.53, 62.11, 63.69), 'varco': (46.58, 47.66, 48.65)},
+    '高級（流暢）':   {'npvi': (62.39, 63.62, 64.87), 'varco': (49.30, 50.24, 51.02)},
+}
+
+# 各程度組的樣本數 n。⚠️ 請到論文的受試者那一節確認後填入（並確認 SE 是對「受試者」還是對
+# 「每一筆測量」算的），填了才會在 prompt 裡多給「±1SD 範圍」；維持 None 就只給平均值。
+# 不要隨便填，SD = SE × √n，n 差十倍，SD 會差三倍多，會直接改變評分結果。
+FR_N = {'初級（不流暢）': None, '中級（合格）': None, '高級（流暢）': None}
+
+
+def build_literature_text():
+    """組出 prompt 裡「文獻參考門檻」那幾行；FR_N 沒填的程度，只給平均值。"""
+    lines = []
+    for level, d in FR_REF.items():
+        parts = []
+        for key, name in (('npvi', 'nPVI'), ('varco', 'Varco')):
+            lo, mean, hi = d[key]
+            seg = f'{name} 平均 {mean:.2f}'
+            n = FR_N.get(level)
+            if n:
+                sd = (hi - lo) / 4 * n ** 0.5      # (上界-下界)/4 = SE；SD = SE × √n
+                seg += f'（±1SD 範圍 {mean - sd:.2f} ~ {mean + sd:.2f}）'
+            parts.append(seg)
+        lines.append(f'- {level}：' + '，'.join(parts))
+    return '\n'.join(lines)
+
+
 def call_ollama_score_overall_fluency(npvi_value, varco_value):
     """
     💡 把這次朗讀實際的 nPVI / Varco 數值，連同「法國英語學習者三個程度」的文獻門檻
@@ -801,11 +926,12 @@ def call_ollama_score_overall_fluency(npvi_value, varco_value):
     varco_low = round(VARCO_SYL_MEAN - VARCO_SYL_STD, 2)
     varco_high = round(VARCO_SYL_MEAN + VARCO_SYL_STD, 2)
 
-    # 💡 法國學習者三個程度的文獻數值，原始是 0-1 尺度，這裡乘以 100 統一成跟
-    #    npvi_value/varco_value 一樣的尺度，避免 Ollama 拿不同單位的數字互相比較。
-    fr_beginner_npvi, fr_beginner_varco = 57.19, 43.03
-    fr_intermediate_npvi, fr_intermediate_varco = 62.11, 47.66
-    fr_advanced_npvi, fr_advanced_varco = 63.62, 50.24
+    # 💡 文獻數值統一由 FR_REF 提供（已 ×100，跟 npvi_value/varco_value 同一個尺度）。
+    #    FR_N 有填的程度才會帶出「±1SD 範圍」，沒填就只給平均值，措辭也跟著調整。
+    literature_text = build_literature_text()
+    has_sd = any(FR_N.get(level) for level in FR_REF)
+    lit_intro = '的平均值與正負 1 個標準差（1 SD）的範圍如下' if has_sd else '的平均值如下'
+    basis = '分佈區間' if has_sd else '平均值'
 
     prompt = f"""你是一位語音學專家，專門評估英語朗讀的流暢度，總分是 10 分。
 
@@ -813,18 +939,16 @@ nPVI (正規化成對變異指數) 衡量朗讀節奏的規律性，Varco 衡量
 數值越接近「熟練朗讀者」該有的節奏與語速控制，代表流暢度越好。
 
 【評分量表】：總分 10 分，分數對應三個程度：
-- 低於 5 分：初級
-- 5 分到 8 分之間：中級
-- 高於 8 分：高級
+- 低於 5 分：初級（不流暢）
+- 5 分到 8 分之間：中級（合格）
+- 高於 8 分：高級（流暢）
 
 【文獻參考門檻】：學術文獻中，法語系英語學習者（L2 English learners）在三個程度下，
-nPVI-S / VarcoS 的平均值如下（已經換算成跟下面「實測值」相同的尺度）：
-- 初級：nPVI ≈ {fr_beginner_npvi}，Varco ≈ {fr_beginner_varco}
-- 中級：nPVI ≈ {fr_intermediate_npvi}，Varco ≈ {fr_intermediate_varco}
-- 高級：nPVI ≈ {fr_advanced_npvi}，Varco ≈ {fr_advanced_varco}
+nPVI-S / VarcoS {lit_intro}（已經換算成跟下面「實測值」相同的尺度）：
+{literature_text}
 
-請以這三組數值當作評分的主要依據：實測值越接近或超過「高級」這組數值，分數應該越高
-（可以超過 8 分）；越接近「初級」這組數值甚至更低，分數應該越低（低於 5 分）；
+請以這三組{basis}當作評分的主要依據：實測值越接近或超過「高級」的平均值，分數應該越高
+（可以超過 8 分）；越接近「初級」的平均值甚至更低，分數應該越低（低於 5 分）；
 落在中級附近，給 5～8 分之間。
 
 【我們自己的門檻，供你參考比對】（平均值 ± 1 個標準差，取自我們自己蒐集的標準朗讀樣本統計）：
@@ -1004,12 +1128,43 @@ def upload_progress(progress_id):
     return resp
 
 
+@app.route('/api/flow_config', methods=['GET'])
+def flow_config():
+    """💡 前端啟動時查詢目前的測試設定（目前只有「要不要顯示小白板」會影響前端）。
+       想確認現在是哪種模式，直接用瀏覽器開 /api/flow_config 就看得到。"""
+    return jsonify({"flow_mode": FLOW_MODE, "whiteboard": WHITEBOARD_ENABLED})
+
+
+@app.route('/log_client_event', methods=['POST'])
+def log_client_event():
+    """💡 接收前端回報的等待秒數、小白板使用情形，寫進 client_events.csv。"""
+    if not session.get('username'):
+        return jsonify({"status": "error", "message": "未登入"}), 401
+    data = request.get_json(silent=True) or {}
+
+    def num(key):
+        try:
+            v = data.get(key)
+            return round(float(v), 3) if v not in (None, '') else ''
+        except (TypeError, ValueError):
+            return ''
+
+    _append_csv_row(CLIENT_EVENTS_CSV, CLIENT_EVENTS_HEADER, [
+        datetime.now().isoformat(timespec='seconds'), FLOW_MODE, WHITEBOARD_LABEL,
+        _csv_safe(data.get('event')), _csv_safe(data.get('session_label')),
+        _csv_safe(data.get('project_id')), _csv_safe(data.get('paragraph_index')),
+        num('wait_sec'), num('strokes'), num('draw_sec'), _csv_safe(data.get('note'))
+    ])
+    return jsonify({"status": "success"})
+
+
 @app.route('/upload_audio', methods=['POST'])
 def upload_audio():
     project_id = request.form.get('project_id')
     mode = request.form.get('mode', 'segment')
     para_idx = request.form.get('paragraph_index')
     progress_id = request.form.get('progress_id')  # 💡 前端產生的一次性 ID，用來對應這次上傳的進度紀錄
+    t_upload_total = time.perf_counter()  # ⏱️ 計時：整個上傳處理的起點
 
     set_upload_progress(progress_id, '正在上傳錄音檔案...')
 
@@ -1056,6 +1211,8 @@ def upload_audio():
         audio_bytes = audio_file.read()
         with open(save_path, 'wb') as f:
             f.write(audio_bytes)
+        # ⏱️ 估算音檔長度（秒）：前端固定送 16kHz 單聲道 16-bit WAV，每秒 32000 bytes、標頭 44 bytes
+        audio_sec = round(max(len(audio_bytes) - 44, 0) / 32000.0, 2)
 
         # 💡 段落切分：跟前端一致的規則
         paragraphs_arr = split_paragraphs(article_content)
@@ -1097,7 +1254,8 @@ def upload_audio():
             wer_data_payload = {'original_text': original_text}
 
             wer_url = "http://backend-wer:8000/api/analyze-reading"
-            wer_response = requests.post(wer_url, files=wer_files, data=wer_data_payload, timeout=120)
+            t_wer = time.perf_counter()  # ⏱️ 計時：Whisper 語音轉文字 + WER 分析（同一支服務）
+            wer_response = requests.post(wer_url, files=wer_files, data=wer_data_payload, timeout=900)
 
             if wer_response.status_code == 200:
                 full_wer_raw_json = wer_response.json()
@@ -1105,6 +1263,9 @@ def upload_audio():
                 wer_stats = full_wer_raw_json.get("statistics", {}) or {}
                 alignment_report = full_wer_raw_json.get("alignment_report", [])
                 error_count = sum(1 for item in alignment_report if item.get("Category") != "Match")
+                log_step('upload', project_id, para_idx, 'whisper_wer', t_wer, audio_sec=audio_sec,
+                         ref_words=len(original_text.split()),
+                         hyp_words=len((full_wer_raw_json.get("whisper_raw_text") or "").split()))
 
                 # 🛡️ 【核心新增】防呆檢查：如果幾乎沒有偵測到使用者念出課文內容
                 #   （沒說話、說話內容跟課文完全不符、錄音太短等），nPVI/Varco 這兩個統計指標
@@ -1171,8 +1332,11 @@ def upload_audio():
                     print(f"📡 [發送網路請求] 正在呼叫 {npvi_url} ...", flush=True)
                     set_upload_progress(progress_id, '正在分析節奏與語速 (nPVI / Varco)...')
 
-                    npvi_response = requests.post(npvi_url, files=npvi_files, data=npvi_data, timeout=90)
+                    t_npvi = time.perf_counter()  # ⏱️ 計時：MFA 強制對齊 + nPVI/Varco 計算（同一支服務）
+                    npvi_response = requests.post(npvi_url, files=npvi_files, data=npvi_data, timeout=900)
                     print(f"📥 [同學網路回應狀態碼]: {npvi_response.status_code}", flush=True)
+                    log_step('upload', project_id, para_idx, 'npvi_mfa', t_npvi, audio_sec=audio_sec,
+                             ref_words=len(original_text.split()))
 
                     if npvi_response.status_code == 200:
                         speech_data = npvi_response.json()
@@ -1299,6 +1463,7 @@ def upload_audio():
 
         db_path = f"/get_audio/{username}/{filename}"
         set_upload_progress(progress_id, '正在儲存結果到資料庫...')
+        t_db = time.perf_counter()  # ⏱️ 計時：寫入資料庫
         try:
             insert_sql = """
                INSERT INTO recordings (project_id, paragraph_index, file_path, wer, total_words, error_count,
@@ -1328,9 +1493,28 @@ def upload_audio():
             conn.commit()
         except Exception as db_err:
             print(f"🚨 MySQL 實體落盤失敗，死因: {str(db_err)}")
+        log_step('upload', project_id, para_idx, 'db_write', t_db, audio_sec=audio_sec)
 
         cursor.close()
         conn.close()
+
+        log_step('upload', project_id, para_idx, 'upload_total', t_upload_total, audio_sec=audio_sec,
+                 ref_words=len(original_text.split()))
+
+        # 🧪 舊流程重建（僅供效率對照測試，正常使用時 FLOW_MODE=split 不會進來）：
+        #    在「同一個請求」內接著跑 LLM 評分/回饋，使用者一次等到全部做完。
+        #    這裡直接呼叫「查看結論」那支函式：同一個請求的 form 裡本來就帶著 project_id 與
+        #    progress_id，而且它會自動跳過已經處理過的段落，所以只會處理這一段。
+        #    upload_total 仍然只代表第一階段，兩個模式之間可以直接比較；
+        #    legacy_total 才是舊流程「一次等完」的總時間。
+        if FLOW_MODE == 'legacy':
+            try:
+                set_upload_progress(progress_id, 'AI 正在生成評分與建議...')
+                generate_project_llm_summary()
+            except Exception as legacy_err:
+                print(f"🚨 舊流程 LLM 階段失敗: {legacy_err}", flush=True)
+            log_step('upload', project_id, para_idx, 'legacy_total', t_upload_total, audio_sec=audio_sec,
+                     ref_words=len(original_text.split()))
 
         clear_upload_progress(progress_id)
         return jsonify({
@@ -1444,6 +1628,7 @@ def generate_project_llm_summary():
     """
     progress_id = request.form.get('progress_id') or (request.get_json(silent=True) or {}).get('progress_id')
     project_id = request.form.get('project_id') or (request.get_json(silent=True) or {}).get('project_id')
+    t_summary_total = time.perf_counter()  # ⏱️ 計時：「查看結論」整體處理的起點
 
     if not project_id:
         return jsonify({"status": "error", "message": "缺少 project_id"})
@@ -1481,6 +1666,7 @@ def generate_project_llm_summary():
                 continue
 
             set_upload_progress(progress_id, f'AI 正在處理第 {para_idx} 段的評分與建議...')
+            t_segment = time.perf_counter()  # ⏱️ 計時：這一段全部 LLM 步驟的起點
 
             # 💡 從存好的 alignment_report JSON 裡，重建這一段當初的 wer_stats / pause_count /
             #    sentence_fluency / whisper文字，這些是呼叫 Ollama 各項評分函式時需要的輸入。
@@ -1507,7 +1693,7 @@ def generate_project_llm_summary():
             fluency_feedback_text = completeness_feedback_text = accuracy_feedback_text = wer_fluency_feedback_text = ""
 
             try:
-                ollama_error_scores = call_ollama_score_errors(wer_stats, pause_count)
+                ollama_error_scores = timed_call('llm_summary', project_id, para_idx, 'llm_score_errors', call_ollama_score_errors, wer_stats, pause_count, ref_words=wer_stats.get('total_ref_words', ''), hyp_words=len(whisper_processed_text.split()))
                 score_completeness = ollama_error_scores.get("completeness", 0.0)
                 score_accuracy = ollama_error_scores.get("accuracy", 0.0)
                 score_fluency = ollama_error_scores.get("fluency", 0.0)
@@ -1515,32 +1701,32 @@ def generate_project_llm_summary():
                 print(f"🚨 段落 {para_idx} Ollama 錯誤統計評分失敗: {e}", flush=True)
 
             try:
-                score_grammar = call_ollama_score_grammar(whisper_processed_text)
+                score_grammar = timed_call('llm_summary', project_id, para_idx, 'llm_score_grammar', call_ollama_score_grammar, whisper_processed_text, ref_words=wer_stats.get('total_ref_words', ''), hyp_words=len(whisper_processed_text.split()))
             except Exception as e:
                 print(f"🚨 段落 {para_idx} Ollama 語法評分失敗: {e}", flush=True)
 
             try:
-                recording_fluency_score_100, fluency_score_reason = call_ollama_score_overall_fluency(npvi_score, varco_score)
+                recording_fluency_score_100, fluency_score_reason = timed_call('llm_summary', project_id, para_idx, 'llm_overall_fluency', call_ollama_score_overall_fluency, npvi_score, varco_score)
             except Exception as e:
                 print(f"🚨 段落 {para_idx} Ollama 流暢度評分失敗: {e}", flush=True)
 
             try:
-                fluency_feedback_text = call_ollama_fluency_feedback(sentence_fluency)
+                fluency_feedback_text = timed_call('llm_summary', project_id, para_idx, 'llm_fluency_feedback', call_ollama_fluency_feedback, sentence_fluency)
             except Exception as e:
                 print(f"🚨 段落 {para_idx} Ollama 流暢度回饋失敗: {e}", flush=True)
 
             try:
-                completeness_feedback_text = call_ollama_wer_category_feedback('completeness', wer_stats)
+                completeness_feedback_text = timed_call('llm_summary', project_id, para_idx, 'llm_feedback_completeness', call_ollama_wer_category_feedback, 'completeness', wer_stats)
             except Exception as e:
                 print(f"🚨 段落 {para_idx} Ollama 完整度回饋失敗: {e}", flush=True)
 
             try:
-                accuracy_feedback_text = call_ollama_wer_category_feedback('accuracy', wer_stats)
+                accuracy_feedback_text = timed_call('llm_summary', project_id, para_idx, 'llm_feedback_accuracy', call_ollama_wer_category_feedback, 'accuracy', wer_stats)
             except Exception as e:
                 print(f"🚨 段落 {para_idx} Ollama 準確度回饋失敗: {e}", flush=True)
 
             try:
-                wer_fluency_feedback_text = call_ollama_wer_category_feedback('fluency', wer_stats)
+                wer_fluency_feedback_text = timed_call('llm_summary', project_id, para_idx, 'llm_feedback_fluency', call_ollama_wer_category_feedback, 'fluency', wer_stats)
             except Exception as e:
                 print(f"🚨 段落 {para_idx} Ollama 流利度回饋失敗: {e}", flush=True)
 
@@ -1570,6 +1756,8 @@ def generate_project_llm_summary():
                 conn.commit()
                 processed_count += 1
                 print(f"✅ 段落 {para_idx} LLM 結果已產生並存檔", flush=True)
+                log_step('llm_summary', project_id, para_idx, 'llm_segment_total', t_segment,
+                         ref_words=wer_stats.get('total_ref_words', ''), hyp_words=len(whisper_processed_text.split()))
             except Exception as e:
                 print(f"🚨 段落 {para_idx} 寫入 LLM 結果失敗: {e}", flush=True)
 
@@ -1586,6 +1774,8 @@ def generate_project_llm_summary():
 
         cursor.close()
         conn.close()
+        log_step('llm_summary', project_id, '', 'summary_total', t_summary_total,
+                 note=f'processed={processed_count};skipped={skipped_count}')
         clear_upload_progress(progress_id)
         return jsonify({
             "status": "success",

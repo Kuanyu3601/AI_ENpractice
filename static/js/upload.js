@@ -3,6 +3,27 @@
 // ══════════════════════════════════════════════════
 
 /**
+ * ⏱️ 把前端量到的等待秒數、白板使用情形回報給後端，寫進 metrics/client_events.csv。
+ *    「發了就算」：失敗只會被吃掉，絕不影響使用者操作。
+ *    想幫同一批測試加上標籤（例如 child_03、cold、warm），在瀏覽器 Console 執行：
+ *        localStorage.setItem('metricsSessionLabel', 'child_03')
+ */
+function logClientEvent(payload) {
+    try {
+        const body = Object.assign({
+            session_label: localStorage.getItem('metricsSessionLabel') || '',
+            project_id: (typeof state !== 'undefined' && state.activeProjectId) || ''
+        }, payload);
+        fetch('/log_client_event', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+            keepalive: true
+        }).catch(() => {});
+    } catch (e) { /* 統計失敗不影響主流程 */ }
+}
+
+/**
  * 💡 【核心新增】：「查看結論」按鈕觸發的函式。
  *    不管現在錄了幾段（可能只錄完第 1 段、也可能全部錄完），都可以呼叫，
  *    後端 /generate_project_llm_summary 會自動判斷「哪些段落還沒有 LLM 結果」，
@@ -20,15 +41,21 @@ async function viewConclusion() {
     if (btn) { btn.disabled = true; btn.textContent = '產生中…'; }
 
     const progressId = `p_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    showUploadProgress(progressId);
+    showUploadProgress(progressId, 'conclusion');
 
     try {
         const formData = new FormData();
         formData.append('project_id', projectId);
         formData.append('progress_id', progressId);
 
+        const tConclusionStart = performance.now();  // ⏱️ 小朋友在「查看結論」實際等待的起點
         const response = await fetch('/generate_project_llm_summary', { method: 'POST', body: formData });
         const result = await response.json();
+        logClientEvent({
+            event: 'conclusion_wait',
+            wait_sec: (performance.now() - tConclusionStart) / 1000,
+            note: `processed=${result.processed_count ?? ''};skipped=${result.skipped_count ?? ''}`
+        });
 
         if (result.status === 'success') {
             if (result.processed_count > 0) {
@@ -59,7 +86,8 @@ async function viewConclusion() {
  *    「這個上傳工作(progress_id)目前真正跑到哪個階段」得到的真實回應，
  *    不是前端自己猜的固定動畫。
  */
-function showUploadProgress(progressId) {
+function showUploadProgress(progressId, phase) {
+    window._uploadProgressPhase = phase || '';   // 'upload' 或 'conclusion'，白板統計時用來標註是哪一種等待
     let overlay = document.getElementById('uploadProgressOverlay');
     if (!overlay) {
         overlay = document.createElement('div');
@@ -85,7 +113,10 @@ function showUploadProgress(progressId) {
     overlay.style.display = 'flex';
 
     // 💡 新增：上傳/處理期間，順便展開等待畫板，讓小朋友等待時可以畫畫打發時間
-    if (typeof showWhiteboard === 'function') showWhiteboard();
+    // 🧪 後台開關 WHITEBOARD=off 時不顯示白板（效率對照測試用），其餘情況照常顯示
+    const _wbOn = !(window.FLOW_CONFIG && window.FLOW_CONFIG.whiteboard === false);
+    if (_wbOn && typeof showWhiteboard === 'function') showWhiteboard();
+    if (_wbOn && typeof wbMetricsStart === 'function') wbMetricsStart();   // ⏱️ 開始統計這一次等待中的白板使用情形
 
     // 💡 每隔約 1 秒問後端一次「這個 progress_id 現在真正跑到哪」，拿到什麼就顯示什麼
     clearInterval(window._uploadProgressTimer);
@@ -107,6 +138,20 @@ function hideUploadProgress() {
     clearInterval(window._uploadProgressTimer);
     const overlay = document.getElementById('uploadProgressOverlay');
     if (overlay) overlay.style.display = 'none';
+
+    // ⏱️ 結束這次等待的白板統計並回報（沒有開始過統計就不會回報）
+    if (typeof wbMetricsStop === 'function') {
+        const wb = wbMetricsStop();
+        if (wb) {
+            logClientEvent({
+                event: 'wb_session',
+                wait_sec: wb.waitSec,
+                strokes: wb.strokes,
+                draw_sec: wb.drawSec,
+                note: window._uploadProgressPhase || ''
+            });
+        }
+    }
 
     // 💡 新增：上傳/處理結束時，把畫板「縮小到側邊」而不是關掉——
     //    小朋友畫的圖要保留下來，隨時可以點旁邊的小圖示繼續畫或看看自己畫了什麼。
@@ -176,11 +221,18 @@ async function uploadAudio() {
         formDataMyBackend.append("progress_id", progressId);
         console.log(`正在上傳... 模式: ${mode}, 段落索引: ${currentPara}`);
 
-        showUploadProgress(progressId);
+        showUploadProgress(progressId, 'upload');
 
         console.log("正在送出音檔至 Flask 後端處理...");
+        const tUploadStart = performance.now();  // ⏱️ 小朋友在上傳這一步實際等待的起點
         const response = await fetch('/upload_audio', { method: 'POST', body: formDataMyBackend });
         const result = await response.json();
+        logClientEvent({
+            event: 'upload_wait',
+            paragraph_index: currentPara,
+            wait_sec: (performance.now() - tUploadStart) / 1000,
+            note: result.status || ''
+        });
 
         // --- 🏁 核心主流程收尾與報表渲染 (在 main.js 內 uploadAudio 成功接收處) ---
         if (response.ok && result.status === 'success') {
@@ -255,3 +307,11 @@ async function uploadAudio() {
         hideUploadProgress();
     }
 }
+
+// 🧪 啟動時向後端查詢目前的測試設定（FLOW_MODE / WHITEBOARD）。
+//    查不到就用預設值（新流程 + 顯示白板），不影響一般使用。
+window.FLOW_CONFIG = window.FLOW_CONFIG || { flow_mode: 'split', whiteboard: true };
+fetch('/api/flow_config', { cache: 'no-store' })
+    .then(r => r.json())
+    .then(cfg => { window.FLOW_CONFIG = cfg; })
+    .catch(() => { /* 保持預設值 */ });
