@@ -896,6 +896,43 @@ def build_literature_text():
     return '\n'.join(lines)
 
 
+# 💡 防呆：實測 nPVI / Varco 只要有任何一項「超出」上面 FR_REF 三個程度涵蓋的範圍
+#    （nPVI 取三組下界最小值～上界最大值；Varco 同理），就直接判為不流暢，
+#    不管 Ollama 給多少分。前端以「低於 5 分＝初級（不流暢）」顯示，所以分數上限壓在 4.9。
+FLUENCY_FAIL_CAP = 4.9
+
+
+def literature_range_violation(npvi_value, varco_value):
+    """回傳 (是否超出範圍, 說明文字)；數值無法轉成數字時視為超出（資料異常不給過關）。"""
+    n_lo = min(d['npvi'][0] for d in FR_REF.values())
+    n_hi = max(d['npvi'][2] for d in FR_REF.values())
+    v_lo = min(d['varco'][0] for d in FR_REF.values())
+    v_hi = max(d['varco'][2] for d in FR_REF.values())
+    try:
+        n = float(npvi_value)
+        v = float(varco_value)
+    except (TypeError, ValueError):
+        return True, '節奏與語速指標無法取得有效數值'
+    msgs = []
+    if not (n_lo <= n <= n_hi):
+        msgs.append(f'節奏指標實測值 {n:.2f} 超出文獻範圍（{n_lo:.2f} 到 {n_hi:.2f}）')
+    if not (v_lo <= v <= v_hi):
+        msgs.append(f'語速指標實測值 {v:.2f} 超出文獻範圍（{v_lo:.2f} 到 {v_hi:.2f}）')
+    return bool(msgs), '；'.join(msgs)
+
+
+def apply_literature_range_guard(score, reason, npvi_value, varco_value):
+    """超出文獻範圍 → 分數壓到 FLUENCY_FAIL_CAP 以下（不流暢），並在評分依據補一句原因。"""
+    violated, msg = literature_range_violation(npvi_value, varco_value)
+    if not violated:
+        return score, reason
+    new_score = min(score, FLUENCY_FAIL_CAP)
+    note = f'{msg}，因此判定為不流暢。'
+    new_reason = f'{reason} 另外，{note}' if reason else note
+    print(f'⚠️ 流暢度防呆觸發：{msg}；分數 {score} → {new_score}', flush=True)
+    return round(new_score, 1), new_reason
+
+
 def call_ollama_score_overall_fluency(npvi_value, varco_value):
     """
     💡 把這次朗讀實際的 nPVI / Varco 數值，連同「法國英語學習者三個程度」的文獻門檻
@@ -983,7 +1020,8 @@ nPVI-S / VarcoS {lit_intro}（已經換算成跟下面「實測值」相同的�
         score = float(result.get("fluency_score", 0.0))
         score = max(0.0, min(10.0, score))  # 保險：不管 Ollama 給了什麼，強制夾在 0-10 分範圍內
         reason = str(result.get("score_reason", "")).strip()
-        return round(score, 1), reason
+        # 💡 防呆：任一項超出文獻範圍就強制判為不流暢
+        return apply_literature_range_guard(round(score, 1), reason, npvi_value, varco_value)
     except (TypeError, ValueError) as e:
         print(f"🚨 Ollama 整體流暢度評分格式異常: {e}, 原始回傳: {result}", flush=True)
         return 0.0, ""

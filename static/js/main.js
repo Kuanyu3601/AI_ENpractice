@@ -1685,7 +1685,7 @@ function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl, w
                  寬度用明確算好的固定像素值，不用 min-width:100%，避免版面量測迴圈造成跳動。 -->
             <div id="${stripId}-scrollwrap" style="overflow-x: auto; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff; cursor: grab;">
                 <div id="${stripId}-scrollarea" style="width: ${totalWidthPx}px;">
-                    <div id="${stripId}-waveform" style="width: ${totalWidthPx}px; padding: 10px 10px 0 10px; box-sizing: border-box;"></div>
+                    <div id="${stripId}-waveform" style="width: ${totalWidthPx}px; padding: 10px 0 0 0; box-sizing: border-box;"></div>
                     <div id="${stripId}-transcript-wrap" style="position: relative; width: ${totalWidthPx}px;">
                         <div id="${stripId}-transcript" style="display: flex; border-top: 1px solid #e2e8f0;">
                             ${transcriptHtml}
@@ -2005,6 +2005,43 @@ function initChunkedAudioBlock(stripId) {
         updateWordHighlight(currentTime);
     });
 
+    // 💡 【修正「波形單獨移動、文字沒跟著動」】
+    //    WaveSurfer 內部自己還有一個橫向捲動容器；只要音檔實際長度比我們算好的寬度多一點點
+    //    （或縮放時寬度還沒同步），這個內部容器就會出現捲軸，波形就能單獨左右移動，
+    //    下方文字卻留在原地，看起來像是對齊錯誤。
+    //    作法：1) 把 WaveSurfer 內部捲動鎖死（不能捲、強制歸零），所有左右移動只由外層
+    //             #scrollwrap 負責，波形與文字永遠一起動；
+    //          2) 音檔載入完成與縮放後，用「音檔實際長度」與「逐字稿結尾」較大者重算寬度，
+    //             讓波形、文字、容器三者寬度一致，不會再有內部溢出。
+    let _wsScroller = null;
+    function lockWaveScroller() {
+        try {
+            const wrapper = ws.getWrapper && ws.getWrapper();
+            _wsScroller = wrapper ? wrapper.parentElement : null;
+            if (!_wsScroller) return;
+            _wsScroller.style.overflowX = 'hidden';
+            _wsScroller.style.overflowY = 'hidden';
+            _wsScroller.scrollLeft = 0;
+            if (!_wsScroller._lockBound) {
+                _wsScroller._lockBound = true;
+                _wsScroller.addEventListener('scroll', () => {
+                    if (_wsScroller.scrollLeft !== 0) _wsScroller.scrollLeft = 0;
+                });
+            }
+        } catch (e) { /* 取不到內部容器就略過，不影響其他功能 */ }
+    }
+    function syncWidthsToAudio() {
+        const audioDur = (ws.getDuration && ws.getDuration()) || 0;
+        const layoutEnd = currentLayout.length ? Math.max(...currentLayout.map(l => l.xmax || 0)) : 0;
+        const w = Math.max(Math.ceil(Math.max(audioDur, layoutEnd) * currentPxPerSec) + 20, 200) + 'px';
+        if (scrollArea) scrollArea.style.width = w;
+        if (waveformEl) waveformEl.style.width = w;
+        if (transcriptWrap) transcriptWrap.style.width = w;
+        lockWaveScroller();
+    }
+    lockWaveScroller();
+    ws.on('ready', syncWidthsToAudio);
+
     // 💡 縮放滑桿：拉動時同時重繪波形（WaveSurfer 內建的 zoom）跟逐字稿列的排版，
     //    兩邊都用同一個新的「每秒像素」比例重新計算，位置才會繼續對得上。
     if (zoomSlider) {
@@ -2035,6 +2072,7 @@ function initChunkedAudioBlock(stripId) {
             if (scrollArea) scrollArea.style.width = newTotalWidthPx + 'px';
             if (waveformEl) waveformEl.style.width = newTotalWidthPx + 'px';
             if (transcriptWrap) transcriptWrap.style.width = newTotalWidthPx + 'px';
+            syncWidthsToAudio(); // 💡 縮放後再依音檔實際長度校正一次，並重新鎖住內部捲動
         });
     }
 
