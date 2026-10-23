@@ -861,152 +861,90 @@ def call_ollama_word_pronunciation_tip(reference_word, hypothesis_word, category
 
 
 # ══════════════════════════════════════════════════
-#  📚 文獻參考數值（法語系英語學習者，三個程度）
+#  🎯 流暢度綜合評比：統一使用「我們自己的門檻」（與子彈圖、句子標記同一組數字）
 # ══════════════════════════════════════════════════
-# 來源：論文圖表，用 WebPlotDigitizer 抓取的近似值。
-# 原始是 0-1 尺度，這裡已經 ×100，對齊資料庫裡 npvi / varco 的尺度（例如平均 56.22），
-# 不然 Ollama 會拿 52 去跟 0.57 比較，評分會亂掉。
-# 每項為 (下界, 平均, 上界)，其中上下界是「該組平均值的 ±2SE」。
-FR_REF = {
-    '初級（不流暢）': {'npvi': (55.82, 57.19, 58.55), 'varco': (42.10, 43.03, 43.94)},
-    '中級（合格）':   {'npvi': (60.53, 62.11, 63.69), 'varco': (46.58, 47.66, 48.65)},
-    '高級（流暢）':   {'npvi': (62.39, 63.62, 64.87), 'varco': (49.30, 50.24, 51.02)},
+# 門檻 = NPVI_SYL / VARCO_SYL 的 平均 ± 1SD（見上方常數）。等級完全由兩項是否在範圍內決定：
+#   兩項都在範圍內   → 流暢     （分數 8.1～10）
+#   只有一項超出範圍 → 待加強   （分數 5.0～7.9）
+#   兩項都超出範圍   → 不流暢   （分數 0～4.9）
+# Ollama 只負責「在該等級的分數區間內」依偏離程度給分並寫評分依據，不再自己決定等級；
+# 程式端會再把分數夾回區間，確保跟子彈圖永遠一致。
+# 前端 scoreToFluencyTierLabel()：<5 不流暢 / 5～8 待加強 / >8 流暢（切點與上面區間吻合）。
+FLUENCY_BANDS = {
+    'fluent':     (8.1, 10.0, '流暢'),
+    'needs_work': (5.0, 7.9,  '待加強'),
+    'not_fluent': (0.0, 4.9,  '不流暢'),
 }
 
-# 各程度組的樣本數 n。⚠️ 請到論文的受試者那一節確認後填入（並確認 SE 是對「受試者」還是對
-# 「每一筆測量」算的），填了才會在 prompt 裡多給「±1SD 範圍」；維持 None 就只給平均值。
-# 不要隨便填，SD = SE × √n，n 差十倍，SD 會差三倍多，會直接改變評分結果。
-FR_N = {'初級（不流暢）': None, '中級（合格）': None, '高級（流暢）': None}
 
-
-def build_literature_text():
-    """組出 prompt 裡「文獻參考門檻」那幾行；FR_N 沒填的程度，只給平均值。"""
-    lines = []
-    for level, d in FR_REF.items():
-        parts = []
-        for key, name in (('npvi', 'nPVI'), ('varco', 'Varco')):
-            lo, mean, hi = d[key]
-            seg = f'{name} 平均 {mean:.2f}'
-            n = FR_N.get(level)
-            if n:
-                sd = (hi - lo) / 4 * n ** 0.5      # (上界-下界)/4 = SE；SD = SE × √n
-                seg += f'（±1SD 範圍 {mean - sd:.2f} ~ {mean + sd:.2f}）'
-            parts.append(seg)
-        lines.append(f'- {level}：' + '，'.join(parts))
-    return '\n'.join(lines)
-
-
-# 💡 防呆：實測 nPVI / Varco 只要有任何一項「超出」上面 FR_REF 三個程度涵蓋的範圍
-#    （nPVI 取三組下界最小值～上界最大值；Varco 同理），就直接判為不流暢，
-#    不管 Ollama 給多少分。前端以「低於 5 分＝初級（不流暢）」顯示，所以分數上限壓在 4.9。
-FLUENCY_FAIL_CAP = 4.9
-
-
-def literature_range_violation(npvi_value, varco_value):
-    """回傳 (是否超出範圍, 說明文字)；數值無法轉成數字時視為超出（資料異常不給過關）。"""
-    n_lo = min(d['npvi'][0] for d in FR_REF.values())
-    n_hi = max(d['npvi'][2] for d in FR_REF.values())
-    v_lo = min(d['varco'][0] for d in FR_REF.values())
-    v_hi = max(d['varco'][2] for d in FR_REF.values())
+def classify_fluency_by_threshold(npvi_value, varco_value):
+    """回傳 (等級代號, 說明)。數值無法轉成數字時回傳 (None, 說明)。"""
     try:
         n = float(npvi_value)
         v = float(varco_value)
     except (TypeError, ValueError):
-        return True, '節奏與語速指標無法取得有效數值'
-    msgs = []
-    if not (n_lo <= n <= n_hi):
-        msgs.append(f'節奏指標實測值 {n:.2f} 超出文獻範圍（{n_lo:.2f} 到 {n_hi:.2f}）')
-    if not (v_lo <= v <= v_hi):
-        msgs.append(f'語速指標實測值 {v:.2f} 超出文獻範圍（{v_lo:.2f} 到 {v_hi:.2f}）')
-    return bool(msgs), '；'.join(msgs)
-
-
-def apply_literature_range_guard(score, reason, npvi_value, varco_value):
-    """超出文獻範圍 → 分數壓到 FLUENCY_FAIL_CAP 以下（不流暢），並在評分依據補一句原因。"""
-    violated, msg = literature_range_violation(npvi_value, varco_value)
-    if not violated:
-        return score, reason
-    new_score = min(score, FLUENCY_FAIL_CAP)
-    note = f'{msg}，因此判定為不流暢。'
-    new_reason = f'{reason} 另外，{note}' if reason else note
-    print(f'⚠️ 流暢度防呆觸發：{msg}；分數 {score} → {new_score}', flush=True)
-    return round(new_score, 1), new_reason
+        return None, '節奏與語速指標無法取得有效數值'
+    n_lo, n_hi = NPVI_SYL_MEAN - NPVI_SYL_STD, NPVI_SYL_MEAN + NPVI_SYL_STD
+    v_lo, v_hi = VARCO_SYL_MEAN - VARCO_SYL_STD, VARCO_SYL_MEAN + VARCO_SYL_STD
+    n_out = not (n_lo <= n <= n_hi)
+    v_out = not (v_lo <= v <= v_hi)
+    if n_out and v_out:
+        return 'not_fluent', '節奏指標與語速指標都超出標準範圍'
+    if n_out:
+        return 'needs_work', '只有節奏指標超出標準範圍'
+    if v_out:
+        return 'needs_work', '只有語速指標超出標準範圍'
+    return 'fluent', '節奏指標與語速指標都在標準範圍內'
 
 
 def call_ollama_score_overall_fluency(npvi_value, varco_value):
     """
-    💡 把這次朗讀實際的 nPVI / Varco 數值，連同「法國英語學習者三個程度」的文獻門檻
-       一起丟給 Ollama，請它綜合比對，給一個 0 到 10 分的分數，
-       同時請它「在同一次呼叫裡」順便說明評分依據（為什麼是這個分數），
-       用一段繁體中文文字回傳，存進資料庫的 fluency_score_reason 欄位。
+    💡 流暢度綜合評比（0~10 分 + 評分依據）。
+       等級由「我們自己的門檻」決定（見上方 FLUENCY_BANDS），Ollama 只在該等級的分數區間內
+       依兩項數值偏離標準平均的程度給分，並用繁體中文寫一段評分依據，存進 fluency_score_reason。
+       分數存進資料庫的 fluency_score_100 欄位（沿用舊欄位名稱，範圍 0-10），
+       前端 scoreToFluencyTierLabel() 依分數顯示 不流暢 / 待加強 / 流暢。
 
-       跟之前的設計不同：這次「等級」完全不在後端決定，Ollama 只負責給分數，
-       分數存進資料庫的 fluency_score_100 欄位（沿用舊欄位名稱，但範圍已改成 0-10），
-       前端 JS 收到分數後，自己套用「<5初級 / 5-8中級 / >8高級」的規則去顯示對應等級文字。
-
-       ⚠️ 單位換算注意：資料庫裡的 npvi_value/varco_value 是 raw*100 的尺度（例如平均值56.22），
-       但論文原始數字是 0-1 尺度（例如0.5719），所以這裡丟進 prompt 前，
-       文獻參考數字要先乘以 100，統一成跟 npvi_value/varco_value 一樣的尺度，
-       不然 Ollama 拿不同尺度的數字互相比較會比錯。
-
-    參數：
-        npvi_value: 實際的 nPVI (syl) 分數，尺度跟資料庫一致（已經是 raw*100 的數字）
-        varco_value: 實際的 Varco (syl) 分數，同上
-
-    回傳：
-        (score, reason) 的 tuple：
-        score 是 0~10 的浮點數；Ollama 呼叫失敗時回傳 0.0
-        reason 是一段繁體中文的評分依據說明；失敗時回傳空字串
+    參數：npvi_value / varco_value 與資料庫同尺度（raw*100，例如平均 56.22）
+    回傳：(score, reason)；Ollama 呼叫失敗時 (0.0, "")；數值無效時 (0.0, 說明)
     """
+    level, level_msg = classify_fluency_by_threshold(npvi_value, varco_value)
+    if level is None:
+        return 0.0, f'{level_msg}，因此判定為不流暢。'
+    lo, hi, level_text = FLUENCY_BANDS[level]
+
     npvi_low = round(NPVI_SYL_MEAN - NPVI_SYL_STD, 2)
     npvi_high = round(NPVI_SYL_MEAN + NPVI_SYL_STD, 2)
     varco_low = round(VARCO_SYL_MEAN - VARCO_SYL_STD, 2)
     varco_high = round(VARCO_SYL_MEAN + VARCO_SYL_STD, 2)
 
-    # 💡 文獻數值統一由 FR_REF 提供（已 ×100，跟 npvi_value/varco_value 同一個尺度）。
-    #    FR_N 有填的程度才會帶出「±1SD 範圍」，沒填就只給平均值，措辭也跟著調整。
-    literature_text = build_literature_text()
-    has_sd = any(FR_N.get(level) for level in FR_REF)
-    lit_intro = '的平均值與正負 1 個標準差（1 SD）的範圍如下' if has_sd else '的平均值如下'
-    basis = '分佈區間' if has_sd else '平均值'
-
     prompt = f"""你是一位語音學專家，專門評估英語朗讀的流暢度，總分是 10 分。
 
 nPVI (正規化成對變異指數) 衡量朗讀節奏的規律性，Varco 衡量語速的變異程度。
-數值越接近「熟練朗讀者」該有的節奏與語速控制，代表流暢度越好。
-
-【評分量表】：總分 10 分，分數對應三個程度：
-- 低於 5 分：初級（不流暢）
-- 5 分到 8 分之間：中級（合格）
-- 高於 8 分：高級（流暢）
-
-【文獻參考門檻】：學術文獻中，法語系英語學習者（L2 English learners）在三個程度下，
-nPVI-S / VarcoS {lit_intro}（已經換算成跟下面「實測值」相同的尺度）：
-{literature_text}
-
-請以這三組{basis}當作評分的主要依據：實測值越接近或超過「高級」的平均值，分數應該越高
-（可以超過 8 分）；越接近「初級」的平均值甚至更低，分數應該越低（低於 5 分）；
-落在中級附近，給 5～8 分之間。
-
-【我們自己的門檻，供你參考比對】（平均值 ± 1 個標準差，取自我們自己蒐集的標準朗讀樣本統計）：
-- nPVI 標準範圍：{npvi_low} 到 {npvi_high}
-- Varco 標準範圍：{varco_low} 到 {varco_high}
-這個範圍橫跨了上面文獻裡初級到高級的區間，你可以參考這個範圍去判斷實測值大概落在
-文獻的哪個程度區間附近，但主要評分依據還是以上面文獻的三組數值比對為主。
+我們用標準朗讀樣本統計出兩項指標的標準範圍（平均值 ± 1 個標準差）：
+- nPVI 標準範圍：{npvi_low} 到 {npvi_high}（平均 {NPVI_SYL_MEAN}）
+- Varco 標準範圍：{varco_low} 到 {varco_high}（平均 {VARCO_SYL_MEAN}）
 
 這位學生這次朗讀的實際數值：
 - nPVI 實測值：{npvi_value}
 - Varco 實測值：{varco_value}
 
-請綜合 nPVI 跟 Varco 兩項數值跟上面三組文獻門檻的比對結果，給一個 0 到 10 分（可以有小數點一位）
-的整體流暢度分數，同時寫一段簡短的評分依據說明，規則如下：
+【等級判定（已由系統依標準範圍判定，你不可以更改）】
+- 兩項都在標準範圍內：流暢（8.1 到 10 分）
+- 只有一項超出標準範圍：待加強（5.0 到 7.9 分）
+- 兩項都超出標準範圍：不流暢（0 到 4.9 分）
+本次判定結果：{level_text}（{level_msg}）。
 
-1. 【語言規則】評分依據說明只能使用「繁體中文」，不可以出現任何英文單字或句子。
-2. 【內容】具體講出這個分數是怎麼來的——例如 nPVI/Varco 各自比較接近文獻裡哪個程度、
-   哪一項數值是主要影響分數高低的關鍵，用口語化的方式描述，不要只丟數字。
+請在 {lo} 到 {hi} 分之間（可以有小數點一位）給一個整體流暢度分數：
+兩項數值越接近各自的標準平均值，分數越靠近區間上緣；偏離越多，越靠近區間下緣。
+同時寫一段簡短的評分依據說明，規則如下：
+
+1. 【語言規則】評分依據說明只能使用「繁體中文」，不可以出現任何英文單字或句子，
+   請用「節奏指標」與「語速指標」稱呼這兩項。
+2. 【內容】具體講出這個分數是怎麼來的——哪一項在範圍內、哪一項超出（偏高或偏低），
+   哪一項是主要影響分數的關鍵，用口語化的方式描述，不要只丟數字。
 3. 【長度】大約 1 到 2 句話，簡潔一點。
-4. 【語氣】客觀、專業，像是評分紀錄的簡短備註，不用特別鼓勵或安慰的語氣（這是給老師/系統
-   查看評分依據用的，不是給小朋友看的鼓勵話）。
+4. 【語氣】客觀、專業，像是評分紀錄的簡短備註，不用特別鼓勵或安慰的語氣。
 
 請「只」回傳一個 JSON 物件，不要有任何其他文字說明或 markdown 標記，格式如下：
 {{"fluency_score": 0.0, "score_reason": "這裡放評分依據說明"}}
@@ -1017,11 +955,11 @@ nPVI-S / VarcoS {lit_intro}（已經換算成跟下面「實測值」相同的�
         return 0.0, ""
 
     try:
-        score = float(result.get("fluency_score", 0.0))
-        score = max(0.0, min(10.0, score))  # 保險：不管 Ollama 給了什麼，強制夾在 0-10 分範圍內
+        score = float(result.get("fluency_score", lo))
+        # 💡 保險：不管 Ollama 給了什麼，強制夾回「該等級」的分數區間，確保跟子彈圖一致
+        score = max(lo, min(hi, score))
         reason = str(result.get("score_reason", "")).strip()
-        # 💡 防呆：任一項超出文獻範圍就強制判為不流暢
-        return apply_literature_range_guard(round(score, 1), reason, npvi_value, varco_value)
+        return round(score, 1), reason
     except (TypeError, ValueError) as e:
         print(f"🚨 Ollama 整體流暢度評分格式異常: {e}, 原始回傳: {result}", flush=True)
         return 0.0, ""
