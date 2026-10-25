@@ -371,7 +371,7 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3")
 #OLLAMA_MODEL = "llama3:latest"
 
 
-def _call_ollama(prompt, timeout=60):
+def _call_ollama(prompt, timeout=900):
     """
     💡 共用的 Ollama 呼叫小工具，統一走 /api/generate、要求回傳 JSON 格式，
        並統一處理連線失敗、逾時、格式錯誤等例外狀況。
@@ -413,84 +413,182 @@ def _call_ollama(prompt, timeout=60):
 
 def call_ollama_score_errors(wer_stats, pause_count=0):
     """
-    💡 把錯誤統計數字整理成提示詞，丟給 Ollama，請它針對三個面向各給 0~5 分：
-       - 完整度 (Completeness)：根據 deletions（漏字）+ insertions（贅字）
-       - 準確度 (Accuracy)：根據 substitutions（替換錯誤）
-       - 流利度 (Fluency)：根據 4 種 repair 行為 + 停頓次數
-
-    參數：
-        wer_stats: WER API 回傳的 statistics 物件（dict），
-                   要有 deletions / insertions / substitutions /
-                   repair_attempt / repair_repetition / repair_replacement / repair_restart
-                   / total_errors / total_ref_words 這些欄位
-        pause_count: 這段錄音的停頓次數（來自 NPVI 回傳的 pause_analysis）
-
-    回傳：
-        {"completeness": float, "accuracy": float, "fluency": float}
-        任何一項失敗都會是 0.0（不會讓整支 API 掛掉）
+    💡 評算完整度、準確度、流利度
+    - 完整度：TER 決定區間，Δ_WIP 決定落點
+    - 準確度：WAcc 決定區間，Δ_Accuracy 決定落點
+    - 流利度：WAcc 決定天花板 (Cap)，Fluency Issue Ratio 決定動態扣分區間 (Penalty Matrix)
     """
     deletions = wer_stats.get('deletions', 0)
     insertions = wer_stats.get('insertions', 0)
     substitutions = wer_stats.get('substitutions', 0)
+    total_ref_words = wer_stats.get('total_ref_words', 1) or 1
+    hits = wer_stats.get('hits', 0)
+    
     repair_attempt = wer_stats.get('repair_attempt', 0)
     repair_repetition = wer_stats.get('repair_repetition', 0)
     repair_replacement = wer_stats.get('repair_replacement', 0)
     repair_restart = wer_stats.get('repair_restart', 0)
-    total_errors = wer_stats.get('total_errors', 0)
-    total_ref_words = wer_stats.get('total_ref_words', 1) or 1
+    
+    N1 = total_ref_words
+    H = hits
+    S = substitutions
+    D = deletions
+    I = insertions
+    R = repair_attempt + repair_repetition + repair_replacement + repair_restart
+    
+    attempted_words_count = H + S + I + R
 
-    # 💡 事先幫模型算好「錯誤數 / 總字數」的比例，直接告訴它落在哪個級距對應幾分，
-    #    不要讓模型自己憑感覺判斷——本地小模型很容易在這種開放式量化評分上
-    #    只給極端值(0分或滿分)，給它明確的公式/級距表可以大幅改善這個問題。
-    completeness_error_count = deletions + insertions
-    completeness_ratio = completeness_error_count / total_ref_words
-    accuracy_ratio = substitutions / total_ref_words
-    repair_total = repair_attempt + repair_repetition + repair_replacement + repair_restart
-    fluency_issue_count = repair_total + pause_count
+    # ==========================================
+    # 🛑 邊界防禦機制 (Safeguards)
+    # ==========================================
+    if D >= N1:
+        return {"completeness": 1.0, "accuracy": 1.0, "fluency": 1.0}
 
-    def _ratio_to_band(ratio):
-        if ratio == 0: return "0%（完全沒有這類錯誤）"
-        if ratio <= 0.05: return f"{ratio*100:.1f}%（很輕微，5%以內）"
-        if ratio <= 0.15: return f"{ratio*100:.1f}%（輕度，5~15%）"
-        if ratio <= 0.30: return f"{ratio*100:.1f}%（中度，15~30%）"
-        return f"{ratio*100:.1f}%（嚴重，超過30%）"
+    if attempted_words_count < (N1 / 2.0):
+        acc_fallback = 1.0 if H == 0 else round(max(1.0, (H / N1) * 5.0), 1)
+        flu_fallback = 1.0 if H == 0 else round(1.0 + ((H / max(1, attempted_words_count)) * 0.9), 1)
+        print(f"⚠️ [防呆攔截] 朗讀字數不足一半 ({attempted_words_count}/{N1})，直接賦予低分防護", flush=True)
+        return {"completeness": 1.0, "accuracy": acc_fallback, "fluency": flu_fallback}
 
-    prompt = f"""你是一位英語朗讀評分老師。根據以下這位學生朗讀時的錯誤統計數字，
-針對三個面向各給 0 到 5 分（務必包含小數點一位，例如 1.5、2.8、4.2，不是只能選整數的 0 或 5）。
+    # ==========================================
+    # 🎯 完整度 (Completeness)
+    # ==========================================
+    ter = (S + D + I) / N1
+    N2 = H + S + I
+    wip = (H / N1) * (H / N2) if N2 > 0 else 0.0
+    delta_wip = max(0.0, (1.0 - ter) - wip)
+    
+    if ter == 0.0:
+        comp_min, comp_max = 5.0, 5.0
+    elif ter <= 0.10:
+        comp_min, comp_max = 4.0, 4.9
+    elif ter <= 0.25:
+        comp_min, comp_max = 3.0, 3.9
+    elif ter <= 0.50:
+        comp_min, comp_max = 2.0, 2.9
+    else:
+        comp_min, comp_max = 1.0, 1.9
 
-請嚴格按照下面這個級距對照表來評分，不要自己另外判斷：
-- 問題比例 0%　　　　　→ 5.0 分
-- 問題比例 0~5%　　　　→ 4.0~4.9 分（比例越高分數越接近 4.0）
-- 問題比例 5~15%　　　 → 3.0~3.9 分
-- 問題比例 15~30%　　　→ 1.5~2.9 分
-- 問題比例超過 30%　　 → 0~1.4 分
+    if ter == 0.0:
+        comp_clamp_min, comp_clamp_max = 5.0, 5.0
+        comp_pos_desc = "該區間最高分數 (完美無錯誤)"
+    else:
+        span = comp_max - comp_min
+        third = span / 3.0
+        if delta_wip <= 0.10: 
+            comp_clamp_min, comp_clamp_max = round(comp_max - third, 1), comp_max
+            comp_pos_desc = "前三分之一分數範圍 (語意衰減極小)"
+        elif delta_wip <= 0.30: 
+            comp_clamp_min, comp_clamp_max = round(comp_min + third, 1), round(comp_max - third, 1)
+            comp_pos_desc = "中三分之一分數範圍 (語意局部模糊)"
+        else: 
+            comp_clamp_min, comp_clamp_max = comp_min, round(comp_min + third, 1)
+            comp_pos_desc = "後三分之一分數範圍 (核心語意嚴重遺失)"
 
-三個面向與它們各自的「問題比例」：
+    # ==========================================
+    # 🎯 準確度 (Accuracy)
+    # ==========================================
+    N_all = H + S + D + I + R
+    w_acc = H / N1
+    g_acc = H / N_all if N_all > 0 else 0.0
+    delta_acc = max(0.0, w_acc - g_acc)
+    
+    if w_acc >= 1.0: acc_min, acc_max = 4.6, 4.9
+    elif w_acc >= 0.97: acc_min, acc_max = 4.6, 4.9
+    elif w_acc >= 0.90: acc_min, acc_max = 4.0, 4.5
+    elif w_acc >= 0.75: acc_min, acc_max = 3.0, 3.9
+    elif w_acc >= 0.50: acc_min, acc_max = 2.0, 2.9
+    else: acc_min, acc_max = 1.0, 1.9
 
-1. 完整度 (completeness)：漏字數 + 贅字數 = {completeness_error_count}，佔總字數 {total_ref_words} 的比例是 {_ratio_to_band(completeness_ratio)}
-2. 準確度 (accuracy)：替換錯誤數 = {substitutions}，佔總字數 {total_ref_words} 的比例是 {_ratio_to_band(accuracy_ratio)}
-3. 流利度 (fluency)：修復行為次數({repair_attempt}+{repair_repetition}+{repair_replacement}+{repair_restart}={repair_total}) + 停頓次數({pause_count}) = {fluency_issue_count} 次，
-   請對照這個次數表評分：0次=5.0分，1~2次=3.5~4.5分，3~5次=2.0~3.4分，6次以上=0~1.9分
+    if w_acc >= 1.0 and delta_acc == 0.0:
+        acc_clamp_min, acc_clamp_max = 5.0, 5.0
+        acc_pos_desc = "該區間最高分數 (完美命中且無贅字)"
+    else:
+        span = acc_max - acc_min
+        third = span / 3.0
+        if delta_acc <= 0.10: 
+            acc_clamp_min, acc_clamp_max = round(acc_max - third, 1), acc_max
+            acc_pos_desc = "前三分之一分數範圍 (發音純淨)"
+        elif delta_acc <= 0.30: 
+            acc_clamp_min, acc_clamp_max = round(acc_min + third, 1), round(acc_max - third, 1)
+            acc_pos_desc = "中三分之一分數範圍 (含部分贅詞)"
+        else: 
+            acc_clamp_min, acc_clamp_max = acc_min, round(acc_min + third, 1)
+            acc_pos_desc = "後三分之一分數範圍 (贅字嚴重)"
 
-請根據上面的級距對照表，各給一個「有小數點」的分數（不要只給整數 0 或 5，除非比例真的剛好是 0%）。
+    # ==========================================
+    # 🎯 流利度 (Fluency) - 動態區間約束模型
+    # ==========================================
+    # 1. 決定準確度天花板 (Accuracy Cap)
+    if w_acc >= 0.90: flu_cap = 5.0
+    elif w_acc >= 0.75: flu_cap = 4.0
+    elif w_acc >= 0.50: flu_cap = 3.0
+    else: flu_cap = 2.0
 
-請「只」回傳一個 JSON 物件，不要有任何其他文字說明或 markdown 標記，格式如下（下面是格式範例，不是建議分數）：
-{{"completeness": 3.7, "accuracy": 4.2, "fluency": 2.8}}
+    # 2. 計算流利度問題佔比 (Fluency Issue Ratio)
+    fluency_issue_count = R + pause_count
+    flu_ratio = fluency_issue_count / N1
+
+    # 3. 對應動態衰減懲罰矩陣 (Dynamic Penalty Matrix)
+    if flu_ratio == 0:
+        flu_clamp_min = flu_clamp_max = flu_cap
+        flu_pos_desc = f"完美無瑕 (直接給予天花板 {flu_cap} 分)"
+    elif flu_ratio <= 0.10:
+        flu_clamp_min = max(1.0, flu_cap - 0.5)
+        flu_clamp_max = flu_cap
+        flu_pos_desc = f"輕微干擾 (限制於 {flu_clamp_min} ~ {flu_clamp_max} 之間)"
+    elif flu_ratio <= 0.25:
+        flu_clamp_min = max(1.0, flu_cap - 1.0)
+        flu_clamp_max = max(1.0, flu_cap - 0.6)
+        flu_pos_desc = f"中度卡頓 (限制於 {flu_clamp_min} ~ {flu_clamp_max} 之間)"
+    elif flu_ratio <= 0.50:
+        flu_clamp_min = max(1.0, flu_cap - 1.5)
+        flu_clamp_max = max(1.0, flu_cap - 1.1)
+        flu_pos_desc = f"流利度受損 (限制於 {flu_clamp_min} ~ {flu_clamp_max} 之間)"
+    else:
+        flu_clamp_min, flu_clamp_max = 1.0, 1.9
+        flu_pos_desc = f"極度不流利 (強制觸底，限制於 1.0 ~ 1.9 之間)"
+
+    # 計算備援分數
+    comp_fallback = round((comp_clamp_min + comp_clamp_max) / 2, 1)
+    acc_fallback = round((acc_clamp_min + acc_clamp_max) / 2, 1)
+    flu_fallback = round((flu_clamp_min + flu_clamp_max) / 2, 1)
+
+    # ==========================================
+    # 🤖 組合 Prompt 呼叫 LLM
+    # ==========================================
+    prompt = f"""你是一位嚴格且客觀的英語朗讀評分考官。
+請針對三個面向各給 1.0 到 5.0 分（包含小數點一位），嚴格依照我提供的分數區間來給分。
+
+1. 完整度 (completeness)：系統判定語意保留落點為「{comp_pos_desc}」。
+   -> 必須嚴格將分數限制在 {comp_clamp_min} ~ {comp_clamp_max} 之間。
+
+2. 準確度 (accuracy)：系統判定發音純淨度落點為「{acc_pos_desc}」。
+   -> 必須嚴格將分數限制在 {acc_clamp_min} ~ {acc_clamp_max} 之間。
+
+3. 流利度 (fluency)：受準確度限制，該生流利度天花板為 {flu_cap} 分。
+   -> 系統判定其流利度問題佔比落點為「{flu_pos_desc}」。
+   -> 必須嚴格將分數限制在 {flu_clamp_min} ~ {flu_clamp_max} 之間。
+
+請只回傳一個 JSON 物件，格式如下：
+{{"completeness": 4.1, "accuracy": 3.4, "fluency": 2.5}}
 """
 
     result = _call_ollama(prompt)
     if not result:
-        return {"completeness": 0.0, "accuracy": 0.0, "fluency": 0.0}
+        return {"completeness": comp_fallback, "accuracy": acc_fallback, "fluency": flu_fallback}
 
     try:
-        return {
-            "completeness": round(float(result.get("completeness", 0)), 1),
-            "accuracy": round(float(result.get("accuracy", 0)), 1),
-            "fluency": round(float(result.get("fluency", 0)), 1)
-        }
+        # 🛡️ 三重強制收斂：無視 LLM 幻覺，硬性鉗制在算好的區間內
+        res_comp = round(max(comp_clamp_min, min(comp_clamp_max, float(result.get("completeness", comp_fallback)))), 1)
+        res_acc = round(max(acc_clamp_min, min(acc_clamp_max, float(result.get("accuracy", acc_fallback)))), 1)
+        res_flu = round(max(flu_clamp_min, min(flu_clamp_max, float(result.get("fluency", flu_fallback)))), 1)
+
+        if H == 0: res_acc = 1.0
+        return {"completeness": res_comp, "accuracy": res_acc, "fluency": res_flu}
     except (TypeError, ValueError) as e:
-        print(f"🚨 Ollama 錯誤統計評分格式異常: {e}, 原始回傳: {result}", flush=True)
-        return {"completeness": 0.0, "accuracy": 0.0, "fluency": 0.0}
+        print(f"🚨 Ollama 錯誤統計評分格式異常: {e}", flush=True)
+        return {"completeness": comp_fallback, "accuracy": acc_fallback, "fluency": flu_fallback}
 
 
 def call_ollama_score_grammar(whisper_text):
@@ -733,72 +831,123 @@ def call_ollama_fluency_feedback(sentence_fluency_list):
         return ""
 
 
-def call_ollama_wer_category_feedback(category, wer_stats):
+def call_ollama_wer_category_feedback(category, wer_stats, pause_count=0):
     """
-    💡 【核心新增】：把單一 WER 總評拆成三個分項評語——完整度(漏字+贅字)、
-       準確度(替換錯誤)、流利度(4種repair行為)，各自獨立呼叫 Ollama，
-       這樣使用者點擊「完整度」「準確度」「流利度」標籤時，才能各自看到/聽到
-       只針對那個面向的具體回饋，而不是一份籠統的總評。
-
-    參數：
-        category: 'completeness' / 'accuracy' / 'fluency' 三選一
-        wer_stats: WER API 回傳的 statistics 物件
+    💡 針對單一面向生成評語：
+    加入「嚴重程度定調 (performance_level)」，並於流利度中同步引入準確度約束，
+    避免發生「低準確度卻被稱讚完美流利」的認知失調現象。
     """
-    deletions = wer_stats.get('deletions', 0)
-    insertions = wer_stats.get('insertions', 0)
-    substitutions = wer_stats.get('substitutions', 0)
-    repair_attempt = wer_stats.get('repair_attempt', 0)
-    repair_repetition = wer_stats.get('repair_repetition', 0)
-    repair_replacement = wer_stats.get('repair_replacement', 0)
-    repair_restart = wer_stats.get('repair_restart', 0)
-    total_ref_words = wer_stats.get('total_ref_words', 1) or 1
+    N1 = wer_stats.get('total_ref_words', 1) or 1
+    H = wer_stats.get('hits', 0)
+    S = wer_stats.get('substitutions', 0)
+    D = wer_stats.get('deletions', 0)
+    I = wer_stats.get('insertions', 0)
+    R = (wer_stats.get('repair_attempt', 0) + 
+         wer_stats.get('repair_repetition', 0) + 
+         wer_stats.get('repair_replacement', 0) + 
+         wer_stats.get('repair_restart', 0))
 
     if category == 'completeness':
-        count = deletions + insertions
-        focus_desc = f"漏字數 {deletions} 個、贅字數 {insertions} 個（總字數 {total_ref_words} 字）"
-        topic_name = "完整度（有沒有漏字或多念字）"
+        # 🎯 完整度
+        ter = (S + D + I) / N1
+        N2 = H + S + I
+        wip = (H / N1) * (H / N2) if N2 > 0 else 0.0
+        delta_wip = max(0.0, (1.0 - ter) - wip)
+        
+        if ter == 0.0: performance_level = "完美"
+        elif ter <= 0.15: performance_level = "優秀（只有極少數漏字或多念的小失誤）"
+        elif ter <= 0.35: performance_level = "普通（有部分漏字或念錯，稍微影響了句子的意思）"
+        else: performance_level = "待加強（漏字或替換字較多，導致故事原本的意思流失比較嚴重）"
+
+        focus_desc = f"狀況描述：總錯誤率 {round(ter*100, 1)}%，語意衰減偏差 {round(delta_wip*100, 1)}%。"
+        topic_name = "完整度（是否有漏字，或語意被破壞）"
+        is_perfect = (ter == 0.0)
+
     elif category == 'accuracy':
-        count = substitutions
-        focus_desc = f"替換錯誤數 {substitutions} 個（總字數 {total_ref_words} 字）"
-        topic_name = "準確度（有沒有把字念成別的字）"
+        # 🎯 準確度
+        N_all = H + S + D + I + R
+        w_acc = H / N1
+        g_acc = H / N_all if N_all > 0 else 0.0
+        delta_acc = max(0.0, w_acc - g_acc)
+        
+        if w_acc >= 1.0 and delta_acc <= 0.0: performance_level = "完美"
+        elif w_acc >= 0.9 and delta_acc <= 0.1: performance_level = "優秀（發音很準確，只有一點點雜音）"
+        elif w_acc >= 0.7: performance_level = "普通（大部分有念對，但夾雜了一些多餘的贅字或雜音干擾）"
+        else: performance_level = "待加強（念錯的單字偏多，且多餘的發音干擾了整體的準確度）"
+
+        focus_desc = f"狀況描述：文本命中率 {round(w_acc*100, 1)}%，準確度偏差 {round(delta_acc*100, 1)}%。"
+        topic_name = "準確度（單字發音正確性與雜音干擾）"
+        is_perfect = (w_acc >= 1.0 and delta_acc <= 0.0)
+
     else:  # fluency
-        count = repair_attempt + repair_repetition + repair_replacement + repair_restart
-        focus_desc = f"重複 {repair_repetition} 次、嘗試修正 {repair_attempt} 次、重新開始/替換修復 {repair_restart + repair_replacement} 次"
-        topic_name = "流利度（念的過程中有沒有卡頓、重來）"
+        # 🎯 流利度 (同步考量準確度天花板)
+        w_acc = H / N1
+        fluency_issue_count = R + pause_count
+        ratio = fluency_issue_count / N1
+        
+        # 💡 修正點 1：判斷真正的完美必須是「無卡頓 且 認字準確率大於等於 90%」
+        is_perfect = (fluency_issue_count == 0 and w_acc >= 0.90)
 
-    if count == 0:
+        # 💡 修正點 2：根據準確度天花板給予 LLM 定調指示
+        if w_acc < 0.50:
+            performance_level = "待加強（錯誤太多，導致聽起來像在盲目猜字，這不是真正的流暢。建議先引導念對單字）"
+            focus_desc = f"狀況描述：雖然異常停頓僅 {fluency_issue_count} 次，但單字正確率不到一半（僅 {round(w_acc*100, 1)}%），過多的錯字與漏字破壞了整體流暢度。"
+        elif w_acc < 0.75:
+            performance_level = "普通（雖然念得過去，但念錯的字不少，影響了流利度的表現。建議放慢速度看清楚單字）"
+            focus_desc = f"狀況描述：異常停頓與結巴共 {fluency_issue_count} 次，但單字正確率僅 {round(w_acc*100, 1)}%，分數因發音正確率不足而受限。"
+        elif w_acc < 0.90:
+            if fluency_issue_count == 0:
+                performance_level = "良好（完全沒有卡頓，但有幾個字念錯了，所以不算完美。下次把字全念對會更棒）"
+            else:
+                performance_level = "良好（有少許卡頓，且伴隨幾個念錯的字。可以再更順暢一點）"
+            focus_desc = f"狀況描述：異常停頓與結巴共 {fluency_issue_count} 次，單字正確率 {round(w_acc*100, 1)}%。"
+        else:
+            if fluency_issue_count == 0:
+                performance_level = "完美"
+            elif ratio <= 0.15:
+                performance_level = "優秀（非常順暢，只有偶爾極短暫的停頓）"
+            elif ratio <= 0.35:
+                performance_level = "普通（念的過程中有幾次結巴、自我修正或卡頓）"
+            else:
+                performance_level = "待加強（停頓和重新念的次數很多，句子聽起來比較不連貫）"
+            focus_desc = f"狀況描述：單字正確率達標，異常停頓與結巴修正總共 {fluency_issue_count} 次。"
+
+        topic_name = "流利度（除了沒有異常停頓，也要把字念對才能真正連貫）"
+
+    # 🌟 表現完美時的預設回饋
+    if is_perfect:
         defaults = {
-            'completeness': "這次朗讀完全沒有漏字或多念字，內容非常完整！",
-            'accuracy': "這次朗讀的每個字都念對了，準確度非常好！",
-            'fluency': "這次朗讀很流暢，沒有卡頓或重來，很棒！"
+            'completeness': "這次念得非常完整，沒有漏掉任何單字，都有把句子的意思清楚表達出來！",
+            'accuracy': "每個單字的發音都很標準，而且完全沒有夾雜多餘的聲音，表現得很好！",
+            'fluency': "這次朗讀非常順暢，每個字都有念對且完全沒有卡住或停頓，聽起來很自然連貫！"
         }
-        return defaults.get(category, "這個面向表現得很好！")
+        return defaults.get(category, "這個部分表現得很棒！")
 
-    prompt = f"""你是一位親切的兒童英語朗讀老師，要針對「{topic_name}」這個面向，
-給小朋友一段簡短的回饋。
+    # 💡 嚴格限制輸出的 Prompt
+    prompt = f"""你是一位溫和且具備同理心的家教老師，要針對學生的「{topic_name}」給予自然、真誠的中文回饋。
 
-這個面向的統計數字：{focus_desc}
+【內部參考數據】（請絕對不要把數字講出來）：
+{focus_desc}
+系統綜合評估表現：【{performance_level}】
 
-請用繁體中文寫一段回饋，規則非常重要、請務必遵守：
+【嚴格規則】請務必遵守：
+1. 語氣真誠自然：不要使用像套版一樣的罐頭回覆，也不要過度幼體化。請像一個溫和的引導者，根據「系統綜合評估表現」給出相符的語氣。如果表現待加強，請溫和地點出問題並給予鼓勵，不要明明錯誤很多還說「幾乎全對」。
+2. 絕對禁止報數據與英文：將評估轉化為自然的形容（例如：有幾個字不小心漏掉了、有幾次小小的卡頓）。絕對不夾雜任何英文字母、單字或百分比符號。
+3. 內容精簡：大約 1 到 2 句話。先根據表現狀況給予回饋，再給一個簡單的練習建議。
 
-1. 【語言規則】整段回饋只能使用「繁體中文」，絕對不可以出現任何一句完整的英文句子當作說明或建議。
-2. 【語氣自然】用口語、自然的中文描述，就像老師直接跟小朋友說話一樣，語氣親切鼓勵，不要打擊信心。
-3. 【長度】大約 1 到 2 句話，簡潔一點，不要太長。
-4. 只針對「{topic_name}」這個面向講，不要提到其他不相關的面向，並給一個簡單的、中文描述的練習建議。
-
-請「只」回傳一個 JSON 物件，不要有任何其他文字說明或 markdown 標記，格式如下：
+請「只」回傳一個 JSON 物件，不要有任何其他文字說明，格式如下：
 {{"feedback": "這裡放你寫的回饋文字"}}
 """
 
     result = _call_ollama(prompt)
     if not result:
-        return ""
+        return "這次練習很用心，我們下次可以先看清楚單字，再試著念得更順暢一點！"
 
     try:
         return str(result.get("feedback", "")).strip()
     except Exception as e:
-        print(f"🚨 Ollama {category} 分項回饋格式異常: {e}, 原始回傳: {result}", flush=True)
-        return ""
+        print(f"🚨 Ollama {category} 分項回饋格式異常: {e}", flush=True)
+        return "表現得不錯，繼續保持練習會越來越好！"
 
 
 def call_ollama_word_pronunciation_tip(reference_word, hypothesis_word, category):
