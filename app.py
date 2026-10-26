@@ -758,6 +758,47 @@ def compute_sentence_fluency_status(chunks_list):
     return result, yellow_count, red_count
 
 
+def _zh_feedback_ok(text):
+    """
+    💡 檢查 LLM 回饋是否「真的是繁體中文評語」：
+       - 去掉『…』「…」引號裡的課文原句之後，不可以還有任何英文字母
+       - 剩下的文字至少要有 8 個中文字（擋掉只回傳一句英文、或只丟一句原文的情況）
+    """
+    t = (text or "").strip()
+    if not t:
+        return False
+    outside = re.sub(r'『[^』]*』|「[^」]*」', '', t)
+    if re.search(r'[A-Za-z]', outside):
+        return False
+    return len(re.findall(r'[\u4e00-\u9fff]', outside)) >= 8
+
+
+def _call_ollama_zh_feedback(prompt, retries=1):
+    """
+    💡 呼叫 Ollama 取得中文回饋，並在程式端驗證語言：
+       不合格（含英文或沒有中文）就重問一次（附上更強的提醒），仍不合格就回傳空字串，
+       由呼叫端用固定的中文範本補上，絕對不把英文垃圾直接顯示給使用者。
+    """
+    extra = ""
+    for attempt in range(retries + 1):
+        result = _call_ollama(prompt + extra)
+        fb = ""
+        if result and isinstance(result, dict):
+            fb = str(result.get("feedback") or "").strip()
+            if not fb:
+                for v in result.values():
+                    if isinstance(v, str) and v.strip():
+                        fb = v.strip()
+                        break
+        if _zh_feedback_ok(fb):
+            return fb
+        print(f"⚠️ Ollama 回饋不符合繁體中文規定（第 {attempt + 1} 次）: {fb[:80]!r}", flush=True)
+        extra = "\n\n【重要提醒】上一次的回答不合格：你必須用完整的繁體中文句子回答，" \
+                "不能只寫英文。英文只能出現在『』引號內的課文原句，其餘全部是中文。" \
+                "feedback 的內容必須以中文開頭。"
+    return ""
+
+
 def call_ollama_fluency_feedback(sentence_fluency_list):
     """
     💡 【核心新增】：把整份錄音裡「每一句話」的 nPVI/Varco 偏差方向與差多少，
@@ -834,15 +875,14 @@ def call_ollama_fluency_feedback(sentence_fluency_list):
 {{"feedback": "這裡放你寫的回饋文字"}}
 """
 
-    result = _call_ollama(prompt)
-    if not result:
-        return ""
+    fb = _call_ollama_zh_feedback(prompt)
+    if fb:
+        return fb
 
-    try:
-        return str(result.get("feedback", "")).strip()
-    except Exception as e:
-        print(f"🚨 Ollama 流暢度回饋格式異常: {e}, 原始回傳: {result}", flush=True)
-        return ""
+    # 💡 LLM 兩次都沒給出合格的中文評語 → 用固定中文範本補上（仍會引用問題最明顯的那句原文）
+    if worst_text:
+        return f"這次朗讀有幾句的節奏和語速不太穩定，尤其是句子『{worst_text}』念的時候最明顯。練習時可以放慢一點，讓每個字之間的間隔平均，念起來會更順喔！"
+    return "這次朗讀有幾句的節奏和語速不太穩定。練習時可以放慢一點，讓每個字之間的間隔平均，念起來會更順喔！"
 
 
 def call_ollama_wer_category_feedback(category, wer_stats, pause_count=0):
@@ -953,21 +993,8 @@ def call_ollama_wer_category_feedback(category, wer_stats, pause_count=0):
 {{"feedback": "這裡放你寫的回饋文字"}}
 """
 
-    result = _call_ollama(prompt)
-    if not result or not isinstance(result, dict):
-        return "這次朗讀很用心，我們下次可以先看清楚單字，再試著念得更順暢一點！"
-
-    try:
-        fb = str(result.get("feedback") or "").strip()
-        if not fb:
-            for v in result.values():
-                if isinstance(v, str) and v.strip():
-                    fb = v.strip()
-                    break
-        return fb if fb else "這次朗讀很用心，我們下次可以先看清楚單字，再試著念得更順暢一點！"
-    except Exception as e:
-        print(f"🚨 Ollama {category} 分項回饋格式異常: {e}", flush=True)
-        return "表現得不錯，繼續保持朗讀練習會越來越好！"
+    fb = _call_ollama_zh_feedback(prompt)
+    return fb if fb else "這次朗讀很用心，我們下次可以先看清楚單字，再試著念得更順暢一點！"
 
 def call_ollama_word_pronunciation_tip(reference_word, hypothesis_word, category):
     """
