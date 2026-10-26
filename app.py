@@ -591,43 +591,57 @@ def call_ollama_score_errors(wer_stats, pause_count=0):
         return {"completeness": comp_fallback, "accuracy": acc_fallback, "fluency": flu_fallback}
 
 
-def call_ollama_score_grammar(whisper_text):
+def call_ollama_score_grammar(whisper_text, original_text):
     """
-    💡 把 Whisper 辨識出的文字丟給 Ollama，請它針對「語法正確性」給 0~5 分。
-       這是第 4 個評分維度，跟前三個（用數字統計去評分）不同，
-       這個是直接把文字內容送給 LLM 去判斷語法是否合理。
+    💡 評算文法語意品質 (加入字數不足一半的強制攔截)
     """
     if not whisper_text or not whisper_text.strip():
-        return 0.0
+        return 1.0
+
+    # 計算單字數量 (以空格切分)
+    hyp_words_count = len([w for w in whisper_text.split() if w.strip()])
+    ref_words_count = len([w for w in (original_text or "").split() if w.strip()])
+
+    # 🛑 【防呆裝置】：朗讀字數未達原文一半
+    if ref_words_count > 0 and hyp_words_count < (ref_words_count / 2.0):
+        print("⚠️ 朗讀字數不足，無法評估文法結構，強制給予 1.0 分", flush=True)
+        return 1.0
 
     prompt = f"""你是一位英語文法老師。以下是一段學生朗讀時被語音辨識出來的文字內容
 （請注意：這段文字可能包含語音辨識的雜訊或誤判，請專注在整體語法結構是否合理，
 不要因為明顯的辨識錯字就過度扣分）：
 
-"{whisper_text}"
+課文原文："{original_text}"
+學生朗讀："{whisper_text}"
 
-請針對這段文字的「語法正確性」給 0 到 5 分（可以有小數點一位），
-5 分代表文法完全正確、0 分代表文法錯誤非常嚴重。
+請專注在兩段文字比對後的「語意與語法連貫性」，給 1.0 到 5.0 分（可以有小數點一位），請依照以下嚴格標準：
+- 5.0 分：文法與原文完全一致，沒有任何多餘的字詞或結構破壞。
+- 4.0~4.9 分：出現極少數的自我修正或贅字，但整體句型結構依然正確且流暢。
+- 3.0~3.9 分：有明顯的斷句錯誤、跳讀或多餘的發音殘留，導致部分語法結構受損。
+- 2.0~2.9 分：漏字或錯誤過多，整句話的結構明顯破碎，語法極不連貫。
+- 1.0~1.9 分：完全偏離原文，語意與文法徹底崩塌。
 
-請「只」回傳一個 JSON 物件，不要有任何其他文字說明或 markdown 標記，格式如下：
-{{"grammar": 0}}
+請「只」回傳一個 JSON 物件，格式如下：
+{{"grammar": 3.2}}
 """
 
     result = _call_ollama(prompt)
     if not result:
-        return 0.0
+        return 1.0
 
     try:
-        return round(float(result.get("grammar", 0)), 1)
+        score = float(result.get("grammar", 1.0))
+        return round(max(1.0, min(5.0, score)), 1)
     except (TypeError, ValueError) as e:
         print(f"🚨 Ollama 語法評分格式異常: {e}, 原始回傳: {result}", flush=True)
-        return 0.0
+        return 1.0
+
 
 
 # 💡 這裡的標準值是「比例值 × 100」換算過來的，因為資料庫存的 npvi/varco 本身就是 raw_value * 100。
-NPVI_SYL_MEAN = 56.22   # 0.5622 * 100
+NPVI_SYL_MEAN = 56.2   # 0.562 * 100
 NPVI_SYL_STD = 13.35    # 0.1335 * 100
-VARCO_SYL_MEAN = 46.71  # 0.4671 * 100
+VARCO_SYL_MEAN = 46.7  # 0.467 * 100
 VARCO_SYL_STD = 9.33    # 0.0933 * 100
 
 
@@ -834,21 +848,24 @@ def call_ollama_fluency_feedback(sentence_fluency_list):
 def call_ollama_wer_category_feedback(category, wer_stats, pause_count=0):
     """
     💡 針對單一面向生成評語：
-    加入「嚴重程度定調 (performance_level)」，並於流利度中同步引入準確度約束，
-    避免發生「低準確度卻被稱讚完美流利」的認知失調現象。
+    修正情境設定，嚴格限制 AI 使用「朗讀」而非「故事/寫作/作業」。
     """
-    N1 = wer_stats.get('total_ref_words', 1) or 1
-    H = wer_stats.get('hits', 0)
-    S = wer_stats.get('substitutions', 0)
-    D = wer_stats.get('deletions', 0)
-    I = wer_stats.get('insertions', 0)
-    R = (wer_stats.get('repair_attempt', 0) + 
-         wer_stats.get('repair_repetition', 0) + 
-         wer_stats.get('repair_replacement', 0) + 
-         wer_stats.get('repair_restart', 0))
+    N1 = max(1, int(wer_stats.get('total_ref_words', 1) or 1))
+    S = int(wer_stats.get('substitutions', 0) or 0)
+    D = int(wer_stats.get('deletions', 0) or 0)
+    I = int(wer_stats.get('insertions', 0) or 0)
+    
+    if 'hits' in wer_stats and wer_stats.get('hits') is not None:
+        H = int(wer_stats.get('hits') or 0)
+    else:
+        H = max(0, N1 - D - S)
+
+    R = (int(wer_stats.get('repair_attempt', 0) or 0) + 
+         int(wer_stats.get('repair_repetition', 0) or 0) + 
+         int(wer_stats.get('repair_replacement', 0) or 0) + 
+         int(wer_stats.get('repair_restart', 0) or 0))
 
     if category == 'completeness':
-        # 🎯 完整度
         ter = (S + D + I) / N1
         N2 = H + S + I
         wip = (H / N1) * (H / N2) if N2 > 0 else 0.0
@@ -857,14 +874,14 @@ def call_ollama_wer_category_feedback(category, wer_stats, pause_count=0):
         if ter == 0.0: performance_level = "完美"
         elif ter <= 0.15: performance_level = "優秀（只有極少數漏字或多念的小失誤）"
         elif ter <= 0.35: performance_level = "普通（有部分漏字或念錯，稍微影響了句子的意思）"
-        else: performance_level = "待加強（漏字或替換字較多，導致故事原本的意思流失比較嚴重）"
+        # 🔧 修正：把「故事原本的意思」改成「原文的意思」
+        else: performance_level = "待加強（漏字或替換字較多，導致原文的意思流失比較嚴重）"
 
         focus_desc = f"狀況描述：總錯誤率 {round(ter*100, 1)}%，語意衰減偏差 {round(delta_wip*100, 1)}%。"
         topic_name = "完整度（是否有漏字，或語意被破壞）"
         is_perfect = (ter == 0.0)
 
     elif category == 'accuracy':
-        # 🎯 準確度
         N_all = H + S + D + I + R
         w_acc = H / N1
         g_acc = H / N_all if N_all > 0 else 0.0
@@ -880,15 +897,12 @@ def call_ollama_wer_category_feedback(category, wer_stats, pause_count=0):
         is_perfect = (w_acc >= 1.0 and delta_acc <= 0.0)
 
     else:  # fluency
-        # 🎯 流利度 (同步考量準確度天花板)
         w_acc = H / N1
         fluency_issue_count = R + pause_count
         ratio = fluency_issue_count / N1
         
-        # 💡 修正點 1：判斷真正的完美必須是「無卡頓 且 認字準確率大於等於 90%」
         is_perfect = (fluency_issue_count == 0 and w_acc >= 0.90)
 
-        # 💡 修正點 2：根據準確度天花板給予 LLM 定調指示
         if w_acc < 0.50:
             performance_level = "待加強（錯誤太多，導致聽起來像在盲目猜字，這不是真正的流暢。建議先引導念對單字）"
             focus_desc = f"狀況描述：雖然異常停頓僅 {fluency_issue_count} 次，但單字正確率不到一半（僅 {round(w_acc*100, 1)}%），過多的錯字與漏字破壞了整體流暢度。"
@@ -914,16 +928,15 @@ def call_ollama_wer_category_feedback(category, wer_stats, pause_count=0):
 
         topic_name = "流利度（除了沒有異常停頓，也要把字念對才能真正連貫）"
 
-    # 🌟 表現完美時的預設回饋
     if is_perfect:
         defaults = {
-            'completeness': "這次念得非常完整，沒有漏掉任何單字，都有把句子的意思清楚表達出來！",
+            'completeness': "這次朗讀得非常完整，沒有漏掉任何單字，都有把句子的意思清楚表達出來！",
             'accuracy': "每個單字的發音都很標準，而且完全沒有夾雜多餘的聲音，表現得很好！",
             'fluency': "這次朗讀非常順暢，每個字都有念對且完全沒有卡住或停頓，聽起來很自然連貫！"
         }
         return defaults.get(category, "這個部分表現得很棒！")
 
-    # 💡 嚴格限制輸出的 Prompt
+    # 🔧 修正：在 Prompt 規則 1 嚴格限制語境，禁用故事、寫作等字眼
     prompt = f"""你是一位溫和且具備同理心的家教老師，要針對學生的「{topic_name}」給予自然、真誠的中文回饋。
 
 【內部參考數據】（請絕對不要把數字講出來）：
@@ -931,24 +944,30 @@ def call_ollama_wer_category_feedback(category, wer_stats, pause_count=0):
 系統綜合評估表現：【{performance_level}】
 
 【嚴格規則】請務必遵守：
-1. 語氣真誠自然：不要使用像套版一樣的罐頭回覆，也不要過度幼體化。請像一個溫和的引導者，根據「系統綜合評估表現」給出相符的語氣。如果表現待加強，請溫和地點出問題並給予鼓勵，不要明明錯誤很多還說「幾乎全對」。
-2. 絕對禁止報數據與英文：將評估轉化為自然的形容（例如：有幾個字不小心漏掉了、有幾次小小的卡頓）。絕對不夾雜任何英文字母、單字或百分比符號。
-3. 內容精簡：大約 1 到 2 句話。先根據表現狀況給予回饋，再給一個簡單的練習建議。
+1. 語境設定：這是一個「英語朗讀」練習，絕對不可以出現「故事」、「寫作」、「作業」、「作文」等詞彙。請使用「朗讀」、「念」、「句子」、「原文」來描述。
+2. 語氣真誠自然：不要使用像套版一樣的罐頭回覆，也不要過度幼體化。請像一個溫和的引導者，根據「系統綜合評估表現」給出相符的語氣。如果表現待加強，請溫和地點出問題並給予鼓勵，不要明明錯誤很多還說「幾乎全對」。
+3. 評語文字禁止報數據與英文：在回饋句子中，請將評估轉化為自然的中文形容（例如：有幾個字不小心漏掉了、有些單字念錯了影響流暢度）。評語文字中絕對不夾雜任何英文單字、阿拉伯數字或百分比符號。
+4. 內容精簡：大約 1 到 2 句話。先根據表現狀況給予回饋，再給一個簡單的練習建議。
 
-請「只」回傳一個 JSON 物件，不要有任何其他文字說明，格式如下：
+請「只」回傳一個 JSON 物件（JSON 的 key 必須固定為英文 "feedback"），格式如下：
 {{"feedback": "這裡放你寫的回饋文字"}}
 """
 
     result = _call_ollama(prompt)
-    if not result:
-        return "這次練習很用心，我們下次可以先看清楚單字，再試著念得更順暢一點！"
+    if not result or not isinstance(result, dict):
+        return "這次朗讀很用心，我們下次可以先看清楚單字，再試著念得更順暢一點！"
 
     try:
-        return str(result.get("feedback", "")).strip()
+        fb = str(result.get("feedback") or "").strip()
+        if not fb:
+            for v in result.values():
+                if isinstance(v, str) and v.strip():
+                    fb = v.strip()
+                    break
+        return fb if fb else "這次朗讀很用心，我們下次可以先看清楚單字，再試著念得更順暢一點！"
     except Exception as e:
         print(f"🚨 Ollama {category} 分項回饋格式異常: {e}", flush=True)
-        return "表現得不錯，繼續保持練習會越來越好！"
-
+        return "表現得不錯，繼續保持朗讀練習會越來越好！"
 
 def call_ollama_word_pronunciation_tip(reference_word, hypothesis_word, category):
     """
@@ -1020,7 +1039,7 @@ def call_ollama_word_pronunciation_tip(reference_word, hypothesis_word, category
 # 程式端會再把分數夾回區間，確保跟子彈圖永遠一致。
 # 前端 scoreToFluencyTierLabel()：<5 不流暢 / 5～8 待加強 / >8 流暢（切點與上面區間吻合）。
 FLUENCY_BANDS = {
-    'fluent':     (8.1, 10.0, '流暢'),
+    'fluent':     (8.0, 10.0, '流暢'),
     'needs_work': (5.0, 7.9,  '待加強'),
     'not_fluent': (0.0, 4.9,  '不流暢'),
 }
@@ -1079,7 +1098,7 @@ nPVI (正規化成對變異指數) 衡量朗讀節奏的規律性，Varco 衡量
 - Varco 實測值：{varco_value}
 
 【等級判定（已由系統依標準範圍判定，你不可以更改）】
-- 兩項都在標準範圍內：流暢（8.1 到 10 分）
+- 兩項都在標準範圍內：流暢（8.0 到 10 分）
 - 只有一項超出標準範圍：待加強（5.0 到 7.9 分）
 - 兩項都超出標準範圍：不流暢（0 到 4.9 分）
 本次判定結果：{level_text}（{level_msg}）。
@@ -1781,6 +1800,12 @@ def generate_project_llm_summary():
         skipped_count = 0
         is_whole_mode_project = any(r['paragraph_index'] == 0 for r in rows)
 
+        # 💡 文法評分需要「課文原文」來跟學生朗讀比對：從 projects.article_content 取回，
+        #    切段規則與 upload_audio 一致（整篇 = 全部段落接起來，分段 = 第 N 段）。
+        cursor.execute("SELECT article_content FROM projects WHERE project_id = %s", (project_id,))
+        _proj_row = cursor.fetchone()
+        _paragraphs_arr = split_paragraphs((_proj_row or {}).get('article_content') or "")
+
         for row in rows:
             para_idx = row['paragraph_index']
 
@@ -1812,6 +1837,13 @@ def generate_project_llm_summary():
             npvi_score = float(row['npvi'] or 0.0)
             varco_score = float(row['varco'] or 0.0)
 
+            if para_idx == 0:
+                original_text_for_grammar = " ".join(_paragraphs_arr)
+            elif 1 <= para_idx <= len(_paragraphs_arr):
+                original_text_for_grammar = _paragraphs_arr[para_idx - 1]
+            else:
+                original_text_for_grammar = ""
+
             score_completeness = score_accuracy = score_fluency = score_grammar = 0.0
             recording_fluency_score_100 = 0.0
             fluency_score_reason = ""
@@ -1826,7 +1858,7 @@ def generate_project_llm_summary():
                 print(f"🚨 段落 {para_idx} Ollama 錯誤統計評分失敗: {e}", flush=True)
 
             try:
-                score_grammar = timed_call('llm_summary', project_id, para_idx, 'llm_score_grammar', call_ollama_score_grammar, whisper_processed_text, ref_words=wer_stats.get('total_ref_words', ''), hyp_words=len(whisper_processed_text.split()))
+                score_grammar = timed_call('llm_summary', project_id, para_idx, 'llm_score_grammar', call_ollama_score_grammar, whisper_processed_text, original_text_for_grammar, ref_words=wer_stats.get('total_ref_words', ''), hyp_words=len(whisper_processed_text.split()))
             except Exception as e:
                 print(f"🚨 段落 {para_idx} Ollama 語法評分失敗: {e}", flush=True)
 

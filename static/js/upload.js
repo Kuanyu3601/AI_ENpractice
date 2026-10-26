@@ -29,7 +29,7 @@ function logClientEvent(payload) {
  *    後端 /generate_project_llm_summary 會自動判斷「哪些段落還沒有 LLM 結果」，
  *    只針對那些段落產生評分與回饋，已經產生過的段落不會被重新呼叫、也不會被覆蓋。
  */
-async function viewConclusion() {
+async function viewConclusion(opts = {}) {
     const projectId = state.activeProjectId;
     if (!projectId) {
         showToast('錯誤：找不到當前專案 ID');
@@ -37,7 +37,8 @@ async function viewConclusion() {
     }
 
     const btn = document.getElementById('skipToResultBtn');
-    if (btn && btn.disabled) return; // 防止重複點擊，也順便擋住「還沒錄過任何一段」時被誤觸發的情況
+    // 💡 從上傳流程自動呼叫時（fromUpload），不受按鈕停用狀態限制
+    if (btn && btn.disabled && !opts.fromUpload) return; // 防止重複點擊，也順便擋住「還沒錄過任何一段」時被誤觸發的情況
     if (btn) { btn.disabled = true; btn.textContent = '產生中…'; }
 
     const progressId = `p_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -257,14 +258,20 @@ async function uploadAudio() {
                 result.wer_result.statistics.fluency_feedback_text = result.wer_result.fluency_feedback_text || '';
                 result.wer_result.statistics.wer_feedback_text = result.wer_result.wer_feedback_text || '';
 
-                // 呼叫單段即時更新器
-                renderWerReportToPanel3(
-                    result.wer_result.alignment_report,
-                    result.wer_result.statistics,
-                    currentPara,
-                    result.url
-                );
-                showToast(`段落 ${currentPara} 儲存與雙 AI 分析成功！🎉`);
+                if (mode === 'whole') {
+                    // 💡 整篇模式：上傳階段只有 Whisper/WER/nPVI/Varco，LLM 評分尚未執行，
+                    //    不在這裡渲染 Step3（否則雷達圖會是 0），一律等使用者按「查看結論」。
+                    showToast('整篇錄音上傳完成！請按「📊 查看結論」產生 AI 評分與建議');
+                } else {
+                    // 呼叫單段即時更新器
+                    renderWerReportToPanel3(
+                        result.wer_result.alignment_report,
+                        result.wer_result.statistics,
+                        currentPara,
+                        result.url
+                    );
+                    showToast(`段落 ${currentPara} 上傳與節奏/WER 分析完成 🎉`);
+                }
             } else {
                 showToast(`段落 ${currentPara} 儲存成功 (分析未完成)`);
             }
@@ -273,19 +280,21 @@ async function uploadAudio() {
                 ? true
                 : state.currentParagraph >= (state.article.paragraphs.length - 1);
             if (isLast) {
-                showToast('全部錄音完成！快來看看 AI 流暢度分析報告吧 🎉');
-
-                if (state.practiceMode === 'whole' && result.wer_result && result.wer_result.statistics) {
-                    // 💡 整篇模式：不要再呼叫 settleAndShowReport() 去後端 /get_project_total_report 抓「平均」，
-                    //    那支 API 目前無法正確辨識整篇錄音這一筆資料，算出來的平均永遠是 0。
-                    //    這裡直接拿這次上傳完成、後端即時回傳的分析結果寫進總成績卡，不經過任何平均計算。
-                    state.completedSteps.add(2);
-                    state.currentStep = 2;
-                    updateStepUI();
-                    renderWholeReportDirectly(
-                        result.wer_result,
-                        result.url
-                    );
+                if (state.practiceMode === 'whole') {
+                    // 💡 整篇模式跟分段一樣：上傳完留在 Step2，不自動跳 Step3、不在這裡跑 LLM。
+                    //    使用者按「📊 查看結論」才會呼叫 /generate_project_llm_summary，
+                    //    之後由 settleAndShowReport() 從資料庫讀回完整報告（上傳等待與結論等待分開記錄）。
+                    hideUploadProgress();
+                    // 💡 已上傳成功，收起「上傳並繼續」按鈕避免重複上傳（要重錄的話重新錄音會再顯示出來）
+                    const _ub = document.getElementById('uploadAudioBtn');
+                    if (_ub) _ub.classList.remove('visible');
+                    showToast('整篇錄音完成！請按「📊 查看結論」查看 AI 流暢度分析報告 🎉');
+                } else if (typeof viewConclusion === 'function') {
+                    // 💡 跟手動按「查看結論」走同一條路：先產生 LLM 結果，再顯示報告。
+                    //    先收起上傳的進度框，結束「上傳等待」的白板統計，
+                    //    viewConclusion() 會自己再開一個「結論等待」的進度框，兩段等待時間分開記錄。
+                    hideUploadProgress();
+                    await viewConclusion({ fromUpload: true });
                 } else if (typeof settleAndShowReport === 'function') {
                     await settleAndShowReport();
                 } else {
