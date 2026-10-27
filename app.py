@@ -371,6 +371,41 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3")
 #OLLAMA_MODEL = "llama3:latest"
 
 
+def get_long_pauses_count(npvi_raw_output):
+    """
+    💡 從 backend-npvi 存下來的 JSON（raw_npvi_output）取出「長停頓次數」long_pauses_count，
+       給 Ollama 評「流利度」與產生流利度回饋時當作停頓依據。
+       - 欄位可能放在 data / data.pause_analysis / data.overall_metrics 等不同層，
+         所以遞迴往下找第一個叫 long_pauses_count 的數值。
+       - 找不到時退回舊做法：pause_analysis.pauses 的總數，確保不會因為欄位缺少而變成 0。
+    """
+    def _find(node, depth=0):
+        if depth > 5:
+            return None
+        if isinstance(node, dict):
+            if 'long_pauses_count' in node:
+                try:
+                    return int(node['long_pauses_count'])
+                except (TypeError, ValueError):
+                    pass
+            for v in node.values():
+                r = _find(v, depth + 1)
+                if r is not None:
+                    return r
+        elif isinstance(node, list):
+            for v in node[:50]:
+                r = _find(v, depth + 1)
+                if r is not None:
+                    return r
+        return None
+
+    found = _find(npvi_raw_output or {})
+    if found is not None:
+        return max(0, found)
+    pa = (((npvi_raw_output or {}).get('data') or {}).get('pause_analysis') or {})
+    return len(pa.get('pauses', []) or [])
+
+
 def _call_ollama(prompt, timeout=900):
     """
     💡 共用的 Ollama 呼叫小工具，統一走 /api/generate、要求回傳 JSON 格式，
@@ -526,7 +561,7 @@ def call_ollama_score_errors(wer_stats, pause_count=0):
     else: flu_cap = 2.0
 
     # 2. 計算流利度問題佔比 (Fluency Issue Ratio)
-    fluency_issue_count = R + pause_count
+    fluency_issue_count = R + pause_count-repair_replacement
     flu_ratio = fluency_issue_count / N1
 
     # 3. 對應動態衰減懲罰矩陣 (Dynamic Penalty Matrix)
@@ -938,7 +973,7 @@ def call_ollama_wer_category_feedback(category, wer_stats, pause_count=0):
 
     else:  # fluency
         w_acc = H / N1
-        fluency_issue_count = R + pause_count
+        fluency_issue_count = R + pause_count-repair_replacement
         ratio = fluency_issue_count / N1
         
         is_perfect = (fluency_issue_count == 0 and w_acc >= 0.90)
@@ -1527,7 +1562,7 @@ def upload_audio():
                         # 💡 新增：從 NPVI 回傳的 pause_analysis 抓出停頓次數，
                         #    給 Ollama 評「流利度」時當作參考依據之一。
                         pause_analysis = actual_data.get("pause_analysis", {}) or {}
-                        pause_count = len(pause_analysis.get("pauses", []) or [])
+                        pause_count = get_long_pauses_count(speech_data)  # 💡 改用 long_pauses_count
                         total_time_sec = actual_data.get("total_time_sec")
 
                         # 🚀 【核心修改】：優先讀同學實際產出、存在共用資料夾裡的真正 TextGrid，
@@ -1858,8 +1893,8 @@ def generate_project_llm_summary():
             whisper_processed_text = (raw_wer_output.get('whisper_raw_text') or '').strip()
             sentence_fluency = stored_report.get('sentence_fluency', []) or []
 
-            npvi_pause_data = ((raw_npvi_output.get('data') or {}).get('pause_analysis') or {})
-            pause_count = len(npvi_pause_data.get('pauses', []) or [])
+            # 💡 取存在 JSON 裡的長停頓次數 long_pauses_count（取不到才退回 pauses 總數）
+            pause_count = get_long_pauses_count(raw_npvi_output)
 
             npvi_score = float(row['npvi'] or 0.0)
             varco_score = float(row['varco'] or 0.0)
@@ -1910,7 +1945,7 @@ def generate_project_llm_summary():
                 print(f"🚨 段落 {para_idx} Ollama 準確度回饋失敗: {e}", flush=True)
 
             try:
-                wer_fluency_feedback_text = timed_call('llm_summary', project_id, para_idx, 'llm_feedback_fluency', call_ollama_wer_category_feedback, 'fluency', wer_stats)
+                wer_fluency_feedback_text = timed_call('llm_summary', project_id, para_idx, 'llm_feedback_fluency', call_ollama_wer_category_feedback, 'fluency', wer_stats, pause_count)
             except Exception as e:
                 print(f"🚨 段落 {para_idx} Ollama 流利度回饋失敗: {e}", flush=True)
 
