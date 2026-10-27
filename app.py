@@ -972,6 +972,7 @@ def call_ollama_wer_category_feedback(category, wer_stats, pause_count=0):
         is_perfect = (w_acc >= 1.0 and delta_acc <= 0.0)
 
     else:  # fluency
+        repair_replacement = int(wer_stats.get('repair_replacement', 0) or 0)
         w_acc = H / N1
         fluency_issue_count = R + pause_count-repair_replacement
         ratio = fluency_issue_count / N1
