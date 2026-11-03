@@ -612,20 +612,20 @@ function renderWholeReportDirectly(werResult, backendAudioUrl) {
         const werPct = werToAccuracyPercentText(stats.wer_repair_fluency || 0);
         const npvi = (werResult.npvi != null) ? parseFloat(werResult.npvi).toFixed(2) : '0.00';
         const varco = (werResult.varco != null) ? parseFloat(werResult.varco).toFixed(2) : '0.00';
-        const overallFluencyScore = werResult.overall_fluency_score_100 != null ? parseFloat(werResult.overall_fluency_score_100) : null;
+        const overallFluencyScore = werResult.fluency_level || null;
         const errorCount = alignmentReport.filter(i => (i.Category || i.category) !== 'Match').length;
 
         // 1. 直接改寫總成績卡的兩個數字，不做任何平均運算
         if (document.getElementById('werScoreText')) document.getElementById('werScoreText').innerText = werPct;
         if (document.getElementById('werFluencyScore100')) {
-            const tierInfo = scoreToFluencyTierLabel(overallFluencyScore);
+            const tierInfo = fluencyLevelToTier(overallFluencyScore);
             const scoreEl = document.getElementById('werFluencyScore100');
             scoreEl.innerText = tierInfo ? tierInfo.text : '—';
             scoreEl.style.color = tierInfo ? tierInfo.color : '';
         }
 
         const bannerTitle = document.getElementById('scoreBannerTitle');
-        if (bannerTitle) bannerTitle.innerHTML = '📊 整篇朗讀流暢度結算看板';
+        if (bannerTitle) bannerTitle.innerHTML = '📊 篇章練習朗讀結算';
 
         // 💡 標題文字也換成「整篇」版本，跟分段模式的報告頁共用同一套文字比對邏輯
         (function updateDetailReportSectionTitle() {
@@ -669,7 +669,7 @@ function renderWholeReportDirectly(werResult, backendAudioUrl) {
                 <span style="font-weight: bold; color: #1f2937; min-width: 65px; font-size: 1.05rem;">整篇朗讀</span>
                 <span style="color: #16a34a; font-weight: bold; background: #dcfce7; padding: 4px 12px; border-radius: 8px; font-size: 0.85rem;">✓ 已錄音</span>
                 <div style="display: flex; gap: 24px; color: #4a5568; font-size: 0.92rem; align-items: center; flex-wrap: wrap;">
-                    <div>詞正確率: <strong style="color: #16a34a; font-size: 1.05rem;">${werPct}</strong></div>
+                    <div>篇章詞語正確率: <strong style="color: #16a34a; font-size: 1.05rem;">${werPct}</strong></div>
                     <div>錯誤數: <strong style="color: #fb923c; font-size: 1.05rem;">${errorCount}</strong></div>
                     <div style="color: #4a5568; border-left: 1px solid #e2e8f0; padding-left: 16px;">nPVI: <strong style="color: #2563eb; font-size: 1.05rem;">${npvi}</strong></div>
                     <div style="color: #4a5568;">Varco: <strong style="color: #10b981; font-size: 1.05rem;">${varco}</strong></div>
@@ -712,7 +712,7 @@ function renderWholeReportDirectly(werResult, backendAudioUrl) {
             stripId, chunkListForWidget, alignmentReport, backendAudioUrl || '',
             wordTimingsForWidget, sentenceFluencyForWidget,
             fluencyFeedbackText, completenessFeedbackText, accuracyFeedbackText, werFluencyFeedbackText,
-            werResult.recording_fluency_score_100, werResult.score_completeness, werResult.score_accuracy, werResult.score_fluency,
+            werResult.fluency_level || '', werResult.score_completeness, werResult.score_accuracy, werResult.score_fluency,
             null
         );
 
@@ -723,7 +723,7 @@ function renderWholeReportDirectly(werResult, backendAudioUrl) {
             new Chart(canvas.getContext('2d'), {
                 type: 'radar',
                 data: {
-                    labels: ['發音完整度', '發音準確度', '口說流利度', '語法'],
+                    labels: ['語句朗讀完整度', '語句朗讀準確度', '語句口說流利度', '口說語法正確性'],
                     datasets: [{ label: '評分 (0-5)', data: radarScores, backgroundColor: 'rgba(230, 57, 70, 0.2)', borderColor: '#e63946', pointBackgroundColor: '#e63946', borderWidth: 2 }]
                 },
                 options: {
@@ -892,10 +892,10 @@ function computeLayout(groupedItems, pxPerSec) {
 // ══════════════════════════════════════════════════
 // 💡 這裡的標準值是用比例(0~1)乘以 100 換算過來的，
 //    因為後端存進資料庫的 npvi/varco 分數本身就是 raw_value * 100。
-const NPVI_SYL_MEAN = 56.22;   // 0.5622 * 100
+const NPVI_SYL_MEAN = 56.25;   // 自訂門檻 0.429~0.696（與 app.py 一致）
 const NPVI_SYL_STD = 13.35;    // 0.1335 * 100
-const VARCO_SYL_MEAN = 46.71;  // 0.4671 * 100
-const VARCO_SYL_STD = 9.33;    // 0.0933 * 100
+const VARCO_SYL_MEAN = 46.7;   // 自訂門檻 0.374~0.560（與 app.py 一致）
+const VARCO_SYL_STD = 9.3;     // 0.093 * 100
 
 /**
  * 💡 畫一條子彈圖：實測值是否落在「標準值 ± 標準差」範圍內，
@@ -1321,11 +1321,12 @@ document.addEventListener('click', (e) => {
  *    換成比較直覺的說法，兩者是同一套區間、只差在顯示字眼。）
  *    等級完全由分數落在哪個區間反推，後端不會另外存等級欄位。
  */
-function scoreToFluencyTierLabel(score) {
-    if (score == null || isNaN(score)) return '';
-    if (score < 5) return { text: '不流暢', color: '#dc2626' };
-    if (score <= 8) return { text: '待加強', color: '#d97706' };
-    return { text: '流暢', color: '#16a34a' };
+function fluencyLevelToTier(level) {
+    // 💡 後端直接給等級文字（流暢／待加強／不流暢），前端只負責配色，不再用任何分數換算。
+    if (level === '流暢')   return { text: '流暢',   color: '#16a34a' };
+    if (level === '待加強') return { text: '待加強', color: '#d97706' };
+    if (level === '不流暢') return { text: '不流暢', color: '#dc2626' };
+    return '';
 }
 
 function ensureCategoryFeedbackPopup() {
@@ -1345,7 +1346,7 @@ function ensureCategoryFeedbackPopup() {
             </div>
             <span id="category-feedback-close" style="cursor:pointer; font-size:1.3rem; color:#94a3b8; line-height:1;">✕</span>
         </div>
-        <div id="category-feedback-text" style="font-size:0.85rem; color:#334155; line-height:1.7; margin-bottom:14px;"></div>
+        <div id="category-feedback-text" style="white-space:pre-line; font-size:0.85rem; color:#334155; line-height:1.7; margin-bottom:14px;"></div>
         <div style="display:flex; gap:14px; align-items:center;">
             <span id="category-feedback-pause" style="cursor:pointer; font-size:1.3rem; display:none;" title="暫停/繼續">⏸</span>
             <span id="category-feedback-replay" style="cursor:pointer; font-size:1.3rem; display:none;" title="重播">🔁</span>
@@ -1416,6 +1417,11 @@ window.showCategoryFeedback = function(title, text, scoreText, scoreColor) {
     if (scoreEl) {
         if (scoreText) {
             scoreEl.textContent = scoreText;
+            scoreEl.style.whiteSpace = 'pre';        // 💡 只依 \n 換行、每一行不再自動折行（避免「完整度」跟數字被拆成兩行）
+            scoreEl.style.flexShrink = '0';
+            scoreEl.style.textAlign = 'left';   // 💡 分數文字含換行時（完整度／準確度分兩行）才會真的換行
+            scoreEl.style.borderRadius = scoreText.indexOf('\n') >= 0 ? '10px' : '12px';
+            scoreEl.style.lineHeight = '1.5';
             scoreEl.style.background = scoreColor || '#64748b';  // 💡 有等級顏色就用等級色，沒有就用預設灰色
             scoreEl.style.display = 'inline-block';
         } else {
@@ -1443,8 +1449,7 @@ window.openCategoryFeedbackForStrip = function(stripId, category) {
     const widget = document.getElementById(`${stripId}-chunkwidget`);
     if (!widget) return;
 
-    const fluencyScoreNum = widget.dataset.fluencyScore100 ? parseFloat(widget.dataset.fluencyScore100) : null;
-    const fluencyTier = scoreToFluencyTierLabel(fluencyScoreNum);
+    const fluencyTier = fluencyLevelToTier(widget.dataset.fluencyLevel || null);
 
     const map = {
         fluency: {
@@ -1466,8 +1471,23 @@ window.openCategoryFeedbackForStrip = function(stripId, category) {
             score: widget.dataset.scoreAccuracy ? `${parseFloat(widget.dataset.scoreAccuracy).toFixed(1)}/5` : '',
             filterCategory: null   // 💡 準確度故意不做任何標色，只顯示評語+TTS
         },
+        error_types: {
+            title: '📋 語句發音錯誤',
+            // 💡 合併「完整度」＋「準確度」兩則評語：各自加上標題再分行顯示，使用者才知道哪一段是哪個面向
+            text: [
+                      ['完整度', widget.dataset.completenessFeedback],
+                      ['準確度', widget.dataset.accuracyFeedback]
+                  ]
+                  .filter(([, t]) => (t || '').trim())
+                  .map(([label, t]) => `${label}：\n${t.trim()}`)
+                  .join('\n\n'),
+            score: (widget.dataset.scoreCompleteness && widget.dataset.scoreAccuracy)
+                    ? `完整度 ${parseFloat(widget.dataset.scoreCompleteness).toFixed(1)}\n準確度 ${parseFloat(widget.dataset.scoreAccuracy).toFixed(1)}`
+                    : '',
+            filterCategory: 'completeness_combined'   // 💡 一次標色：刪除+插入+替換
+        },
         fluency_wer: {
-            title: '📋 口說流利度評語',
+            title: '📋 語句口說流利度評語',
             text: widget.dataset.werFluencyFeedback || '',
             score: widget.dataset.scoreFluencyWer ? `${parseFloat(widget.dataset.scoreFluencyWer).toFixed(1)}/5` : '',
             filterCategory: 'fluency_wer_combined'   // 💡 一次標色：重複+嘗試修正+重新開始
@@ -1600,7 +1620,7 @@ function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl, w
              data-completeness-feedback="${(completenessFeedbackText || '').replace(/"/g, '&quot;')}"
              data-accuracy-feedback="${(accuracyFeedbackText || '').replace(/"/g, '&quot;')}"
              data-wer-fluency-feedback="${(werFluencyFeedbackText || '').replace(/"/g, '&quot;')}"
-             data-fluency-score100="${fluencyScore100 != null ? fluencyScore100 : ''}"
+             data-fluency-level="${fluencyScore100 ? fluencyScore100 : ''}"
              data-score-completeness="${scoreCompleteness != null ? scoreCompleteness : ''}"
              data-score-accuracy="${scoreAccuracy != null ? scoreAccuracy : ''}"
              data-score-fluency-wer="${scoreFluencyWer != null ? scoreFluencyWer : ''}"
@@ -1627,10 +1647,11 @@ function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl, w
                 <div class="metric-chip-grid" style="display:flex; flex-wrap:wrap; gap:8px;">
                 <!-- 💡 發音完整度 ... -->
 
-                <!-- 💡 發音完整度：底層的刪除/插入/替換按鈕隱藏起來（不對外呈現計分細節），
-                     標籤點擊後會一次觸發「刪除+插入+替換」三種錯誤的標色與跳轉，同時顯示 LLM 評語+TTS。 -->
+                <!-- 💡 語句發音錯誤（原「發音完整度」＋「發音準確度」合併）：
+                     直接顯示 刪除 D／插入 I／替換 S 的次數；點擊後一次標出三種錯誤、跳轉，
+                     並顯示完整度＋準確度兩則 LLM 評語 + TTS。 -->
                 <div style="border:2px solid #d97706; border-radius:10px; padding:6px 14px; background:#fffbeb;">
-                    <span class="category-label-clickable" onclick="window.openCategoryFeedbackForStrip('${stripId}','completeness')" style="font-size:0.85rem; font-weight:bold; color:#d97706; text-align:center; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:2px; flex-wrap:wrap;">發音完整度<span style="font-size:0.7rem; font-weight:normal;">(${completenessErrCount}/${totalRefWords})</span><span style="font-size:0.7rem;">👆</span></span>
+                    <span class="category-label-clickable" onclick="window.openCategoryFeedbackForStrip('${stripId}','error_types')" style="font-size:0.85rem; font-weight:bold; color:#d97706; text-align:center; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:2px; flex-wrap:wrap;">語句發音錯誤<span style="font-size:0.7rem; font-weight:normal;">(${completenessErrCount}/${totalRefWords})</span><span style="font-size:0.7rem;">👆</span></span>
                     <div style="display:none;">
                         <button class="wer-filter-btn-chunked" data-original-bg="#fff" data-original-color="#16a34a" onclick="window.switchWerFilterChunked(this, 'deletions', '${stripId}')" style="padding: 5px 12px; border:none; background: #fff; color: #16a34a; border-radius: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size:0.85rem;">刪除 (${errorCounts.deletions})</button>
                         <button class="wer-filter-btn-chunked" data-original-bg="#fff" data-original-color="#16a34a" onclick="window.switchWerFilterChunked(this, 'insertions', '${stripId}')" style="padding: 5px 12px; border:none; background: #fff; color: #16a34a; border-radius: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size:0.85rem;">插入 (${errorCounts.insertions})</button>
@@ -1638,15 +1659,10 @@ function buildChunkedAudioBlock(stripId, chunks, alignmentReport, rawAudioUrl, w
                     </div>
                 </div>
 
-                <!-- 💡 發音準確度：不做任何文字標色/跳轉，純粹只顯示 LLM 評語 + TTS -->
-                <div style="border:2px solid #d97706; border-radius:10px; padding:6px 14px; background:#fffbeb;">
-                    <span class="category-label-clickable" onclick="window.openCategoryFeedbackForStrip('${stripId}','accuracy')" style="font-size:0.85rem; font-weight:bold; color:#d97706; text-align:center; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:2px; flex-wrap:wrap;">發音準確度<span style="font-size:0.7rem; font-weight:normal;">(${accuracyErrCount}/${totalRefWords})</span><span style="font-size:0.7rem;">👆</span></span>
-                </div>
-
                 <!-- 💡 口說流利度：底層的重複/嘗試修正/重新開始按鈕隱藏起來，
                      標籤點擊後一次觸發三種行為的標色與跳轉，同時顯示 LLM 評語+TTS。 -->
                 <div style="border:2px solid #d97706; border-radius:10px; padding:6px 14px; background:#fffbeb;">
-                    <span class="category-label-clickable" onclick="window.openCategoryFeedbackForStrip('${stripId}','fluency_wer')" style="font-size:0.85rem; font-weight:bold; color:#d97706; text-align:center; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:2px; flex-wrap:wrap;">口說流利度<span style="font-size:0.7rem; font-weight:normal;">(${fluencyWerErrCount}/${totalRefWords})</span><span style="font-size:0.7rem;">👆</span></span>
+                    <span class="category-label-clickable" onclick="window.openCategoryFeedbackForStrip('${stripId}','fluency_wer')" style="font-size:0.85rem; font-weight:bold; color:#d97706; text-align:center; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:2px; flex-wrap:wrap;">語句口說流利度<span style="font-size:0.7rem; font-weight:normal;">(${fluencyWerErrCount}/${totalRefWords})</span><span style="font-size:0.7rem;">👆</span></span>
                     <div style="display:none;">
                         <button class="wer-filter-btn-chunked" data-original-bg="#fff" data-original-color="#d97706" onclick="window.switchWerFilterChunked(this, 'repair_repetition', '${stripId}')" style="padding: 5px 12px; border:none; background: #fff; color: #d97706; border-radius: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size:0.85rem;">重複 (${errorCounts.repair_repetition})</button>
                         <button class="wer-filter-btn-chunked" data-original-bg="#fff" data-original-color="#d97706" onclick="window.switchWerFilterChunked(this, 'repair_attempt', '${stripId}')" style="padding: 5px 12px; border:none; background: #fff; color: #d97706; border-radius: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size:0.85rem;">嘗試修正 (${errorCounts.repair_attempt})</button>
@@ -2181,9 +2197,8 @@ function renderMultipleParagraphsReport(paragraphList, globalStats, mode = 'segm
                 effectiveGlobalStats ? werToAccuracyPercentText(effectiveGlobalStats.wer_average) : '0.0%';
         }
         if (document.getElementById('werFluencyScore100')) {
-            const rawScore = (effectiveGlobalStats && effectiveGlobalStats.overall_fluency_score_100 != null)
-                ? parseFloat(effectiveGlobalStats.overall_fluency_score_100) : null;
-            const tierInfo = scoreToFluencyTierLabel(rawScore);
+            const rawScore = (effectiveGlobalStats && effectiveGlobalStats.overall_fluency_level) || null;
+            const tierInfo = fluencyLevelToTier(rawScore);
             const scoreEl = document.getElementById('werFluencyScore100');
             scoreEl.innerText = tierInfo ? tierInfo.text : '—';
             scoreEl.style.color = tierInfo ? tierInfo.color : '';
@@ -2192,9 +2207,7 @@ function renderMultipleParagraphsReport(paragraphList, globalStats, mode = 'segm
         // 💡 順手把標題文字也改一下，whole 模式不叫「Total 平均」
         const bannerTitle = document.getElementById('scoreBannerTitle');
         if (bannerTitle) {
-            bannerTitle.innerHTML = isWhole
-                ? '📊 整篇式練習 朗讀結算'
-                : '📊 分段式練習 朗讀結算';
+            bannerTitle.innerHTML = '📊 篇章練習朗讀結算';
         }
 
         // 💡 「段落詳細回報&分析」這個小標題不是用 JS 動態產生的固定文字（是寫死在 main.html 裡），
@@ -2334,7 +2347,7 @@ function renderMultipleParagraphsReport(paragraphList, globalStats, mode = 'segm
                 const chunkedAudioHTML = buildChunkedAudioBlock(
                     stripId, chunkListForWidget, alignments, para.file_path || '', wordTimingsForWidget, sentenceFluencyForWidget,
                     fluencyFeedbackText, completenessFeedbackText, accuracyFeedbackText, werFluencyFeedbackText,
-                    para.fluency_score_100, para.score_completeness, para.score_accuracy, para.score_fluency,
+                    para.fluency_level, para.score_completeness, para.score_accuracy, para.score_fluency,
                     originalParagraphsForWidget
                 );
 
@@ -2350,7 +2363,7 @@ function renderMultipleParagraphsReport(paragraphList, globalStats, mode = 'segm
                         new Chart(canvas.getContext('2d'), {
                             type: 'radar',
                             data: {
-                                labels: ['發音完整度', '發音準確度', '口說流利度', '語法'],
+                                labels: ['語句朗讀完整度', '語句朗讀準確度', '語句口說流利度', '口說語法正確性'],
                                 datasets: [{
                                     label: '評分 (0-5)',
                                     data: radarScores,

@@ -674,10 +674,24 @@ def call_ollama_score_grammar(whisper_text, original_text):
 
 
 # 💡 這裡的標準值是「比例值 × 100」換算過來的，因為資料庫存的 npvi/varco 本身就是 raw_value * 100。
-NPVI_SYL_MEAN = 56.2   # 0.562 * 100
-NPVI_SYL_STD = 13.35    # 0.1335 * 100
-VARCO_SYL_MEAN = 46.7  # 0.467 * 100
-VARCO_SYL_STD = 9.33    # 0.0933 * 100
+# ══════════════════════════════════════════════════
+#  📏 兩組門檻（用途不同，請不要混用）
+# ══════════════════════════════════════════════════
+# ① 「口語流暢分析」子彈圖＋逐句標記（pass/yellow/red）：用「我們自己蒐集」的門檻
+#    nPVI-S  0.429 ~ 0.696  → 42.9 ~ 69.6（平均 56.25 ± 13.35）
+#    Varco-S 0.374 ~ 0.560  → 37.4 ~ 56.0（平均 46.7  ± 9.3 ）
+#    💡 資料庫存的 npvi/varco 本身是 raw_value * 100，所以這裡也乘 100。
+#    前端 main.js 的 NPVI_SYL_* / VARCO_SYL_* 要跟這四個數字一致。
+NPVI_SYL_MEAN = 56.25
+NPVI_SYL_STD = 13.35
+VARCO_SYL_MEAN = 46.7
+VARCO_SYL_STD = 9.3
+
+# ② 「流暢度綜合評比」：以「本研究自行收集」的範圍當參考門檻（與子彈圖相同）（同樣乘 100）
+#    nPVI  0.4513 ~ 0.7909（平均 0.6211） → 45.13 ~ 79.09
+#    Varco 0.3702 ~ 0.5830（平均 0.4766） → 37.02 ~ 58.30
+FR_NPVI_LO, FR_NPVI_HI = 42.9, 69.6
+FR_VARCO_LO, FR_VARCO_HI = 37.4, 56.0
 
 
 def compute_sentence_fluency_status(chunks_list):
@@ -1092,19 +1106,17 @@ def call_ollama_word_pronunciation_tip(reference_word, hypothesis_word, category
 
 
 # ══════════════════════════════════════════════════
-#  🎯 流暢度綜合評比：統一使用「我們自己的門檻」（與子彈圖、句子標記同一組數字）
+#  🎯 流暢度綜合評比（自訂門檻版）：純規則判定，不呼叫 LLM、沒有任何分數換算
 # ══════════════════════════════════════════════════
-# 門檻 = NPVI_SYL / VARCO_SYL 的 平均 ± 1SD（見上方常數）。等級完全由兩項是否在範圍內決定：
-#   兩項都在範圍內   → 流暢     （分數 8.1～10）
-#   只有一項超出範圍 → 待加強   （分數 5.0～7.9）
-#   兩項都超出範圍   → 不流暢   （分數 0～4.9）
-# Ollama 只負責「在該等級的分數區間內」依偏離程度給分並寫評分依據，不再自己決定等級；
-# 程式端會再把分數夾回區間，確保跟子彈圖永遠一致。
-# 前端 scoreToFluencyTierLabel()：<5 不流暢 / 5～8 待加強 / >8 流暢（切點與上面區間吻合）。
-FLUENCY_BANDS = {
-    'fluent':     (8.0, 10.0, '流暢'),
-    'needs_work': (5.0, 7.9,  '待加強'),
-    'not_fluent': (0.0, 4.9,  '不流暢'),
+# 門檻 = 自行收集的 nPVI / Varco 範圍（FR_* 常數名稱沿用，數值已改為自訂門檻）。等級完全由兩項是否在範圍內決定：
+#   兩項都在範圍內   → 流暢
+#   只有一項超出範圍 → 待加強
+#   兩項都超出範圍   → 不流暢
+# 💡 等級直接用中文文字（流暢／待加強／不流暢）傳給前端顯示，不再換算成任何分數。
+FLUENCY_LEVEL_TEXT = {
+    'fluent':     '流暢',
+    'needs_work': '待加強',
+    'not_fluent': '不流暢',
 }
 
 
@@ -1114,9 +1126,9 @@ def classify_fluency_by_threshold(npvi_value, varco_value):
         n = float(npvi_value)
         v = float(varco_value)
     except (TypeError, ValueError):
-        return None, '節奏與語速指標無法取得有效數值'
-    n_lo, n_hi = NPVI_SYL_MEAN - NPVI_SYL_STD, NPVI_SYL_MEAN + NPVI_SYL_STD
-    v_lo, v_hi = VARCO_SYL_MEAN - VARCO_SYL_STD, VARCO_SYL_MEAN + VARCO_SYL_STD
+        return None, '節奏指標與語速指標無法取得有效數值'
+    n_lo, n_hi = FR_NPVI_LO, FR_NPVI_HI      # 💡 綜合評比門檻（自訂）
+    v_lo, v_hi = FR_VARCO_LO, FR_VARCO_HI
     n_out = not (n_lo <= n <= n_hi)
     v_out = not (v_lo <= v <= v_hi)
     if n_out and v_out:
@@ -1128,72 +1140,38 @@ def classify_fluency_by_threshold(npvi_value, varco_value):
     return 'fluent', '節奏指標與語速指標都在標準範圍內'
 
 
-def call_ollama_score_overall_fluency(npvi_value, varco_value):
-    """
-    💡 流暢度綜合評比（0~10 分 + 評分依據）。
-       等級由「我們自己的門檻」決定（見上方 FLUENCY_BANDS），Ollama 只在該等級的分數區間內
-       依兩項數值偏離標準平均的程度給分，並用繁體中文寫一段評分依據，存進 fluency_score_reason。
-       分數存進資料庫的 fluency_score_100 欄位（沿用舊欄位名稱，範圍 0-10），
-       前端 scoreToFluencyTierLabel() 依分數顯示 不流暢 / 待加強 / 流暢。
+def classify_fluency_level_text(npvi_value, varco_value):
+    """直接回傳等級文字（流暢／待加強／不流暢）；數值缺少或無法轉成數字時回傳 None。"""
+    if npvi_value is None or varco_value is None:
+        return None
+    level, _msg = classify_fluency_by_threshold(npvi_value, varco_value)
+    return FLUENCY_LEVEL_TEXT.get(level)
 
-    參數：npvi_value / varco_value 與資料庫同尺度（raw*100，例如平均 56.22）
-    回傳：(score, reason)；Ollama 呼叫失敗時 (0.0, "")；數值無效時 (0.0, 說明)
+
+def fluency_level_and_reason(npvi_value, varco_value):
+    """
+    💡 由 nPVI / Varco 直接判定等級，回傳 (等級文字, 評分依據文字)。
+       不經過 LLM、也沒有任何 0~10 分的換算；評分依據用固定中文範本。
     """
     level, level_msg = classify_fluency_by_threshold(npvi_value, varco_value)
     if level is None:
-        return 0.0, f'{level_msg}，因此判定為不流暢。'
-    lo, hi, level_text = FLUENCY_BANDS[level]
+        return '不流暢', f'{level_msg}，因此判定為不流暢。'
+    level_text = FLUENCY_LEVEL_TEXT[level]
 
-    npvi_low = round(NPVI_SYL_MEAN - NPVI_SYL_STD, 2)
-    npvi_high = round(NPVI_SYL_MEAN + NPVI_SYL_STD, 2)
-    varco_low = round(VARCO_SYL_MEAN - VARCO_SYL_STD, 2)
-    varco_high = round(VARCO_SYL_MEAN + VARCO_SYL_STD, 2)
+    n = float(npvi_value)
+    v = float(varco_value)
+    n_lo, n_hi = FR_NPVI_LO, FR_NPVI_HI
+    v_lo, v_hi = FR_VARCO_LO, FR_VARCO_HI
 
-    prompt = f"""你是一位語音學專家，專門評估英語朗讀的流暢度，總分是 10 分。
+    def _desc(name, val, lo, hi):
+        if val < lo:
+            return f'{name}偏低（實測 {val:.2f}，標準範圍 {lo:.2f}～{hi:.2f}）'
+        if val > hi:
+            return f'{name}偏高（實測 {val:.2f}，標準範圍 {lo:.2f}～{hi:.2f}）'
+        return f'{name}在標準範圍內（實測 {val:.2f}，標準範圍 {lo:.2f}～{hi:.2f}）'
 
-nPVI (正規化成對變異指數) 衡量朗讀節奏的規律性，Varco 衡量語速的變異程度。
-我們用標準朗讀樣本統計出兩項指標的標準範圍（平均值 ± 1 個標準差）：
-- nPVI 標準範圍：{npvi_low} 到 {npvi_high}（平均 {NPVI_SYL_MEAN}）
-- Varco 標準範圍：{varco_low} 到 {varco_high}（平均 {VARCO_SYL_MEAN}）
-
-這位學生這次朗讀的實際數值：
-- nPVI 實測值：{npvi_value}
-- Varco 實測值：{varco_value}
-
-【等級判定（已由系統依標準範圍判定，你不可以更改）】
-- 兩項都在標準範圍內：流暢（8.0 到 10 分）
-- 只有一項超出標準範圍：待加強（5.0 到 7.9 分）
-- 兩項都超出標準範圍：不流暢（0 到 4.9 分）
-本次判定結果：{level_text}（{level_msg}）。
-
-請在 {lo} 到 {hi} 分之間（可以有小數點一位）給一個整體流暢度分數：
-兩項數值越接近各自的標準平均值，分數越靠近區間上緣；偏離越多，越靠近區間下緣。
-同時寫一段簡短的評分依據說明，規則如下：
-
-1. 【語言規則】評分依據說明只能使用「繁體中文」，不可以出現任何英文單字或句子，
-   請用「節奏指標」與「語速指標」稱呼這兩項。
-2. 【內容】具體講出這個分數是怎麼來的——哪一項在範圍內、哪一項超出（偏高或偏低），
-   哪一項是主要影響分數的關鍵，用口語化的方式描述，不要只丟數字。
-3. 【長度】大約 1 到 2 句話，簡潔一點。
-4. 【語氣】客觀、專業，像是評分紀錄的簡短備註，不用特別鼓勵或安慰的語氣。
-
-請「只」回傳一個 JSON 物件，不要有任何其他文字說明或 markdown 標記，格式如下：
-{{"fluency_score": 0.0, "score_reason": "這裡放評分依據說明"}}
-"""
-
-    result = _call_ollama(prompt)
-    if not result:
-        return 0.0, ""
-
-    try:
-        score = float(result.get("fluency_score", lo))
-        # 💡 保險：不管 Ollama 給了什麼，強制夾回「該等級」的分數區間，確保跟子彈圖一致
-        score = max(lo, min(hi, score))
-        reason = str(result.get("score_reason", "")).strip()
-        return round(score, 1), reason
-    except (TypeError, ValueError) as e:
-        print(f"🚨 Ollama 整體流暢度評分格式異常: {e}, 原始回傳: {result}", flush=True)
-        return 0.0, ""
+    reason = f'{_desc("節奏指標", n, n_lo, n_hi)}；{_desc("語速指標", v, v_lo, v_hi)}，因此判定為{level_text}。'
+    return level_text, reason
 
 
 # --- 3. 基礎路由 (頁面跳轉) ---
@@ -1926,7 +1904,10 @@ def generate_project_llm_summary():
                 print(f"🚨 段落 {para_idx} Ollama 語法評分失敗: {e}", flush=True)
 
             try:
-                recording_fluency_score_100, fluency_score_reason = timed_call('llm_summary', project_id, para_idx, 'llm_overall_fluency', call_ollama_score_overall_fluency, npvi_score, varco_score)
+                # 💡 流暢度綜合評比：純規則判定（不呼叫 LLM、不算分數）。等級不存資料庫，
+                #    前端讀取時由 nPVI / Varco 即時判定；這裡只存「評分依據」文字。
+                _lvl_text, fluency_score_reason = fluency_level_and_reason(npvi_score, varco_score)
+                recording_fluency_score_100 = None
             except Exception as e:
                 print(f"🚨 段落 {para_idx} Ollama 流暢度評分失敗: {e}", flush=True)
 
@@ -2054,7 +2035,6 @@ def get_project_total_report():
 
         total_npvi = 0.0
         total_varco = 0.0
-        total_fluency_score_100 = 0.0  # 💡 新增：累加每段已經存好的流暢度分數，改用平均值而不是重新問一次 Ollama
         recorded_count = 0
 
         for i in range(1, total_paragraphs_count + 1):
@@ -2083,7 +2063,7 @@ def get_project_total_report():
                     "score_accuracy": row['score_accuracy'] if row['score_accuracy'] is not None else 0.0,
                     "score_fluency": row['score_fluency'] if row['score_fluency'] is not None else 0.0,
                     "score_grammar": row['score_grammar'] if row['score_grammar'] is not None else 0.0,
-                    "fluency_score_100": row['fluency_score_100'] if row['fluency_score_100'] is not None else 0.0,
+                    "fluency_level": classify_fluency_level_text(row['npvi'], row['varco']),   # 💡 即時由 nPVI/Varco 判定
                     "fluency_score_reason": row['fluency_score_reason'] or "",
                     "fluency_feedback_text": row['fluency_feedback_text'] or "",
                     "completeness_feedback_text": row['completeness_feedback_text'] or "",
@@ -2098,7 +2078,6 @@ def get_project_total_report():
 
                     total_npvi += float(row['npvi'] or 0.0)
                     total_varco += float(row['varco'] or 0.0)
-                    total_fluency_score_100 += float(row['fluency_score_100'] or 0.0)  # 💡 新增
 
                     recorded_count += 1
             else:
@@ -2119,7 +2098,7 @@ def get_project_total_report():
                     "completeness_feedback_text": None,
                     "accuracy_feedback_text": None,
                     "wer_fluency_feedback_text": None,
-                    "fluency_score_100": None,
+                    "fluency_level": None,
                     "fluency_score_reason": None
                 })
 
@@ -2154,7 +2133,7 @@ def get_project_total_report():
                 "score_accuracy": row['score_accuracy'] if row['score_accuracy'] is not None else 0.0,
                 "score_fluency": row['score_fluency'] if row['score_fluency'] is not None else 0.0,
                 "score_grammar": row['score_grammar'] if row['score_grammar'] is not None else 0.0,
-                "fluency_score_100": row['fluency_score_100'] if row['fluency_score_100'] is not None else 0.0,
+                "fluency_level": classify_fluency_level_text(row['npvi'], row['varco']),   # 💡 即時由 nPVI/Varco 判定
                 "fluency_score_reason": row['fluency_score_reason'] or "",
                 "fluency_feedback_text": row['fluency_feedback_text'] or "",
                 "completeness_feedback_text": row['completeness_feedback_text'] or "",
@@ -2168,23 +2147,14 @@ def get_project_total_report():
                 total_errors += int(row['error_count'] or 0)
                 total_npvi += float(row['npvi'] or 0.0)
                 total_varco += float(row['varco'] or 0.0)
-                total_fluency_score_100 += float(row['fluency_score_100'] or 0.0)  # 💡 新增
                 recorded_count += 1
 
         avg_npvi = total_npvi / recorded_count if recorded_count > 0 else 0.0
         avg_varco = total_varco / recorded_count if recorded_count > 0 else 0.0
 
-        # 🔧 核心修正：不要再每次都重新問一次 Ollama 了！
-        #    之前的寫法每次使用者查看報告，都會即時呼叫 Ollama 重新算一次 0-100 分數，
-        #    但 Ollama 本身有隨機性，同樣的 npvi/varco 每次問到的分數會不一樣，
-        #    導致「同一份報告，刷新幾次分數就跳來跳去」，使用者體感就是不穩定、不可信任。
-        #
-        #    正確做法：每一段錄音自己的 fluency_score_100，早在上傳當下就已經呼叫過 Ollama
-        #    算好、存進資料庫了（recordings.fluency_score_100），是固定不變的值。
-        #    分段模式的「整體」流暢度分數，直接把所有已錄段落「已經存好」的分數取平均即可，
-        #    不需要、也不應該再另外呼叫一次 Ollama——這樣不管刷新幾次，結果都會是同一個數字。
-        overall_fluency_score_100 = total_fluency_score_100 / recorded_count if recorded_count > 0 else 0.0
-        print(f"✅ 流暢度綜合評分（分段模式，取各段已存分數的平均，不再即時呼叫 Ollama）: {overall_fluency_score_100:.1f}", flush=True)
+        # 🇫🇷 整體流暢度評比：把各段 nPVI / Varco 取平均，再用同一組門檻判定一次（不經 LLM、沒有分數）
+        overall_fluency_level = classify_fluency_level_text(avg_npvi, avg_varco) if recorded_count > 0 else None
+        print(f"✅ 流暢度綜合評比（平均 nPVI={avg_npvi:.2f}, 平均 Varco={avg_varco:.2f}）→ {overall_fluency_level}", flush=True)
 
         global_stats = {
             "wer_average": total_wer / recorded_count if recorded_count > 0 else 0,
@@ -2192,7 +2162,7 @@ def get_project_total_report():
             "total_errors": total_errors,
             "average_npvi": avg_npvi,
             "average_varco": avg_varco,
-            "overall_fluency_score_100": overall_fluency_score_100
+            "overall_fluency_level": overall_fluency_level
         }
 
         cursor.close()
